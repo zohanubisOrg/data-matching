@@ -17,6 +17,31 @@ def run_command(images: list[Path] = typer.Option(None, "--images", exists=True,
     typer.echo(json.dumps(run(_paths(images), pos, imports, output, auto_threshold, review_threshold, top_k, verbose), indent=2))
 
 
+@app.command("match-names")
+def match_names_command(
+    pos: Path = typer.Option(DEFAULT_POS, "--pos", exists=True, dir_okay=False),
+    imports: Path = typer.Option(DEFAULT_IMPORTS, "--imports", exists=True, dir_okay=False),
+    output: Path = typer.Option(DEFAULT_OUTPUT, "--output"),
+    auto_threshold: float = typer.Option(.88, "--auto-threshold", min=0, max=1),
+    review_threshold: float = typer.Option(.72, "--review-threshold", min=0, max=1),
+    ambiguity_margin: float = typer.Option(.04, "--ambiguity-margin", min=0, max=1),
+):
+    """Match import workbook product names directly against POS names; images are ignored."""
+    from .ingestion.pos_loader import load_pos
+    from .ingestion.supplier_loader import load_imports
+    from .matching.name_only import match_import_names, summarize_name_matches, write_name_match_outputs
+
+    products, _, _ = load_pos(pos)
+    supplier_rows, _ = load_imports(imports)
+    rows = match_import_names(products, supplier_rows, auto_threshold, review_threshold, ambiguity_margin)
+    summary = summarize_name_matches(rows)
+    paths = write_name_match_outputs(rows, summary, output)
+    typer.echo(json.dumps({
+        **summary,
+        "outputs": {key: str(value) for key, value in paths.items()},
+    }, ensure_ascii=False, indent=2))
+
+
 @app.command()
 def profile(images: list[Path] = typer.Option(None, "--images", exists=True, file_okay=False), pos: Path = typer.Option(DEFAULT_POS, "--pos", exists=True, dir_okay=False), imports: Path = typer.Option(DEFAULT_IMPORTS, "--imports", exists=True, dir_okay=False), output: Path = typer.Option(DEFAULT_OUTPUT, "--output")):
     # Profile is deliberately implemented through the same safe ingestion path; it never matches.
