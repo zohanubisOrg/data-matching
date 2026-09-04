@@ -1,0 +1,54 @@
+name: Name-only matcher optimization
+
+on:
+  push:
+    branches:
+      - feat/name-only-pos-matching
+    paths:
+      - .github/workflows/name-only-optimize.yml
+      - src/product_mapper/matching/name_only.py
+      - tests/test_name_only_matching.py
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run name-only tests
+        run: pytest -q tests/test_name_only_matching.py
+
+      - name: Run 748-row benchmark
+        if: success()
+        run: |
+          python -m product_mapper.cli match-names \
+            --pos Products_imported_to_Shopbox_19_08_26_with_SKU.xlsx \
+            --imports Ten_hang_nhap.xlsx \
+            --output output/name-only \
+            --auto-threshold 0.80 \
+            --review-threshold 0.68
+          cat output/name-only/name_only_summary.json
+
+      - name: Upload benchmark
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimized-name-only-match-results
+          path: |
+            output/name-only/name_only_match.xlsx
+            output/name-only/name_only_match.csv
+            output/name-only/name_only_summary.json
+          if-no-files-found: error
