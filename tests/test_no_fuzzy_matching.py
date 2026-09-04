@@ -130,3 +130,40 @@ def test_summary_reports_auto_review_unmatched_and_target_flags():
     assert summary["candidate_coverage_pct"] == 75.0
     assert summary["target_auto_ge_80"] is False
     assert summary["target_review_lt_20"] is False
+
+
+def test_equivalent_units_match_without_a_score():
+    rows = match_import_names_no_fuzzy(
+        [p(1, "Coconut Water 1 L")],
+        [s("Coconut Water 12 X 1000 ML BAMBOO TREE")],
+    )
+    assert rows[0]["status"] == "AUTO_MATCHED"
+    assert rows[0]["item_size"] == "1000 ml"
+    assert "score" not in rows[0]
+
+
+def test_observed_typo_and_compound_aliases_are_exact_not_fuzzy():
+    rows = match_import_names_no_fuzzy(
+        [p(1, "Turmeric Powder"), p(2, "Lemongrass")],
+        [s("Tumeric powder 10X400 G"), s("Lemon Grass 1 X 2 KG")],
+    )
+    assert [row["status"] for row in rows] == ["AUTO_MATCHED", "AUTO_MATCHED"]
+
+
+def test_no_fuzzy_dependency_is_used_by_deterministic_matcher():
+    import inspect
+    import product_mapper.matching.no_fuzzy as module
+
+    assert "rapidfuzz" not in inspect.getsource(module).casefold()
+
+
+def test_write_outputs_keeps_summary_and_matches_auditable(tmp_path):
+    from openpyxl import load_workbook
+    from product_mapper.matching.no_fuzzy import write_no_fuzzy_outputs
+
+    rows = match_import_names_no_fuzzy([p(1, "Sesame Oil 500 ml")], [s("Sesame Oil 500ml")])
+    paths = write_no_fuzzy_outputs(rows, summarize_no_fuzzy_matches(rows), tmp_path)
+    workbook = load_workbook(paths["xlsx"], read_only=True)
+    assert workbook.sheetnames == ["summary", "matches"]
+    assert paths["csv"].exists()
+    assert paths["summary_json"].exists()

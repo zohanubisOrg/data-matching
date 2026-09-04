@@ -37,6 +37,16 @@ Defaults are both image folders, the two supplied workbooks, and `output`. `pyth
 python -m product_mapper.cli profile
 ```
 
+To benchmark the 748 import names against POS names without images or fuzzy scoring:
+
+```powershell
+python -m product_mapper.cli match-names-no-fuzzy --output .\output\no-fuzzy
+```
+
+The deterministic report separates safe name matches, unique POS identity resolution,
+review candidates, and unmatched rows. Supplier SKU and POS identifiers are retained for
+audit only; they never influence name candidate selection.
+
 ## Acceptance Criteria & Definition of Done
 
 This project strictly adheres to the output-based Definition of Done (DoD) and 15 Pass/Fail acceptance criteria defined in [ACCEPTANCE_CRITERIA.md](file:///d:/Work/shopify/ACCEPTANCE_CRITERIA.md).
@@ -96,4 +106,3 @@ Create 50-100 rows covering duplicate names, variants, sizes, each source, and d
 - Tune `--auto-threshold`, `--review-threshold`, and `--top-k` only after reviewing a gold dataset; lowering thresholds increases false-auto-match risk.
 - Add supplier aliases only in `src/product_mapper/config.py` when the workbook provides clear evidence.
 - Add future image intelligence by implementing `VisionProvider`; the default `NoOpVisionProvider` requires no API key.
-

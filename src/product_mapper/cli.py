@@ -42,6 +42,32 @@ def match_names_command(
     }, ensure_ascii=False, indent=2))
 
 
+@app.command("match-names-no-fuzzy")
+def match_names_no_fuzzy_command(
+    pos: Path = typer.Option(DEFAULT_POS, "--pos", exists=True, dir_okay=False),
+    imports: Path = typer.Option(DEFAULT_IMPORTS, "--imports", exists=True, dir_okay=False),
+    output: Path = typer.Option(DEFAULT_OUTPUT / "no-fuzzy", "--output"),
+):
+    """Deterministically match import names to POS names without images or fuzzy scoring."""
+    from .ingestion.pos_loader import load_pos
+    from .ingestion.supplier_loader import load_imports
+    from .matching.no_fuzzy import (
+        match_import_names_no_fuzzy,
+        summarize_no_fuzzy_matches,
+        write_no_fuzzy_outputs,
+    )
+
+    products, _, _ = load_pos(pos)
+    supplier_rows, _ = load_imports(imports)
+    rows = match_import_names_no_fuzzy(products, supplier_rows)
+    summary = summarize_no_fuzzy_matches(rows)
+    paths = write_no_fuzzy_outputs(rows, summary, output)
+    typer.echo(json.dumps({
+        **summary,
+        "outputs": {key: str(value) for key, value in paths.items()},
+    }, ensure_ascii=False, indent=2))
+
+
 @app.command()
 def profile(images: list[Path] = typer.Option(None, "--images", exists=True, file_okay=False), pos: Path = typer.Option(DEFAULT_POS, "--pos", exists=True, dir_okay=False), imports: Path = typer.Option(DEFAULT_IMPORTS, "--imports", exists=True, dir_okay=False), output: Path = typer.Option(DEFAULT_OUTPUT, "--output")):
     # Profile is deliberately implemented through the same safe ingestion path; it never matches.
