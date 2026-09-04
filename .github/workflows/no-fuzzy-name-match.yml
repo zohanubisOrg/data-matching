@@ -1,0 +1,50 @@
+name: No-fuzzy POS name benchmark
+
+on:
+  push:
+    branches: [feat/name-only-pos-matching]
+    paths:
+      - 'tests/test_no_fuzzy_matching.py'
+      - 'src/product_mapper/matching/no_fuzzy.py'
+      - '.github/workflows/no-fuzzy-name-match.yml'
+  workflow_dispatch:
+
+jobs:
+  test-and-benchmark:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+      - name: Run strict no-fuzzy tests
+        run: pytest -q tests/test_no_fuzzy_matching.py
+      - name: Run 748-row NO_FUZZY benchmark
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from product_mapper.ingestion.pos_loader import load_pos
+          from product_mapper.ingestion.supplier_loader import load_imports
+          from product_mapper.matching.no_fuzzy import match_import_names_no_fuzzy, summarize_no_fuzzy_matches, write_no_fuzzy_outputs
+
+          products, _, _ = load_pos(Path('Products_imported_to_Shopbox_19_08_26_with_SKU.xlsx'))
+          imports, _ = load_imports(Path('Ten_hang_nhap.xlsx'))
+          rows = match_import_names_no_fuzzy(products, imports)
+          summary = summarize_no_fuzzy_matches(rows)
+          write_no_fuzzy_outputs(rows, summary, Path('output/no-fuzzy'))
+          print(summary)
+          PY
+          cat output/no-fuzzy/no_fuzzy_summary.json
+      - name: Upload NO_FUZZY benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: no-fuzzy-name-match-results
+          path: |
+            output/no-fuzzy/no_fuzzy_match.xlsx
+            output/no-fuzzy/no_fuzzy_match.csv
+            output/no-fuzzy/no_fuzzy_summary.json
+          if-no-files-found: error
