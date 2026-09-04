@@ -7,6 +7,7 @@ from rapidfuzz.fuzz import WRatio, token_set_ratio
 
 from ..models import POSProduct, SupplierProduct
 from ..parsing.text_normalizer import normalize_text, translate_multilingual
+from .candidate_generator import CandidateGenerator
 
 
 def _normalized(value: str) -> str:
@@ -63,9 +64,11 @@ def match_import_names(
         raise ValueError("require 0 <= review_threshold <= auto_threshold <= 1")
 
     rows: list[dict] = []
+    generator = CandidateGenerator(products, pool_size=80)
     for source in imports:
+        candidates = generator.generate(source.name)
         scored = sorted(
-            ((_product_score(source.name, product), product) for product in products),
+            ((_product_score(source.name, product), product) for product in candidates),
             key=lambda item: item[0],
             reverse=True,
         )
