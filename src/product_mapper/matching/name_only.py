@@ -38,6 +38,11 @@ DOMAIN_ALIASES: dict[str, str] = {
 UNIT_RE = r"(?:kg|g|ml|l|pcs|pc|stk)"
 PACK_RE = re.compile(rf"\b(?:\d+(?:[.,]\d+)?\s*x\s*)+(\d+(?:[.,]\d+)?)\s*({UNIT_RE})\b", re.I)
 SIZE_RE = re.compile(r"(?<!\w)(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b", re.I)
+IDENTITY_GENERIC = {
+    "rice", "noodle", "noodles", "ramen", "sauce", "oil", "drink", "milk", "tea",
+    "flour", "powder", "bean", "beans", "biscuit", "biscuits", "snack", "cream", "jam",
+    "paste", "juice", "water", "soup", "base", "mix", "instant", "frozen", "dried",
+}
 
 
 def _apply_aliases(text: str) -> str:
@@ -56,7 +61,6 @@ def _normalized(value: str) -> str:
 
 def _clean_name(value: str) -> str:
     text = _normalized(value)
-    # Keep the sellable unit size, discard only case-count logistics: 20 x 500 ml -> 500 ml.
     text = PACK_RE.sub(lambda m: f"{m.group(1)} {m.group(2)}", text)
     text = re.sub(r"\borigin\s*:?[ ]*[a-z]{2,3}\b", " ", text, flags=re.I)
     text = re.sub(r"\borigin\b", " ", text, flags=re.I)
@@ -135,7 +139,6 @@ def _score_core(query: str, candidate: str) -> float:
     wr = WRatio(q, c) / 100.0
     ts = token_set_ratio(q, c) / 100.0
     score = max(wr, ts) * 0.65 + candidate_coverage * 0.20 + query_coverage * 0.15
-    # A one-word POS label must not swallow a long, specific import description.
     if len(c_tokens) == 1 and len(q_tokens) >= 3:
         score = min(score, 0.72)
     elif len(c_tokens) <= 2 and len(q_tokens) >= 5 and candidate_coverage < 1.0:
@@ -167,12 +170,19 @@ def _product_evidence(import_name: str, product: POSProduct) -> dict:
         if generic:
             score = min(score, 0.74)
 
+        q_identity = q_core_tokens - IDENTITY_GENERIC
+        c_identity = c_core_tokens - IDENTITY_GENERIC
+        identity_conflict = bool(q_identity and c_identity and q_identity.isdisjoint(c_identity))
+        if identity_conflict:
+            score = min(score, 0.60)
+
         evidence = {
             "score": score,
             "full_score": full_score,
             "core_score": core_score,
             "size_exact": size_exact,
             "size_conflict": size_conflict,
+            "identity_conflict": identity_conflict,
             "generic_candidate": generic,
             "matched_field": field,
             "matched_name": value,
@@ -183,8 +193,9 @@ def _product_evidence(import_name: str, product: POSProduct) -> dict:
             best = evidence
     return best or {
         "score": 0.0, "full_score": 0.0, "core_score": 0.0,
-        "size_exact": False, "size_conflict": False, "generic_candidate": False,
-        "matched_field": "", "matched_name": "", "name_key": "", "core_key": "",
+        "size_exact": False, "size_conflict": False, "identity_conflict": False,
+        "generic_candidate": False, "matched_field": "", "matched_name": "",
+        "name_key": "", "core_key": "",
     }
 
 
@@ -197,9 +208,8 @@ def match_import_names(
 ) -> list[dict]:
     """Match import names directly to POS names. Images and IDs never influence scoring.
 
-    Matching is intentionally evaluated at POS-name level. Multiple POS rows that expose
-    the same matched name are one name candidate; their SKU identity remains explicitly
-    ambiguous rather than suppressing an otherwise valid name match.
+    Matching is evaluated at POS-name level. Multiple POS rows exposing the same matched
+    name are one name candidate; SKU identity stays explicitly ambiguous.
     """
     if not 0 <= review_threshold <= auto_threshold <= 1:
         raise ValueError("require 0 <= review_threshold <= auto_threshold <= 1")
@@ -234,8 +244,9 @@ def match_import_names(
                 "supplier_sku": source.supplier_sku or "", "status": "UNMATCHED", "score": 0.0,
                 "core_score": 0.0, "top2_score": 0.0, "margin": 0.0, "match_method": "name_only",
                 "matched_field": "", "matched_pos_rows": 0, "pos_identity_ambiguous": False,
-                "size_conflict": False, "pos_product_id": "", "pos_sku": "", "pos_barcode": "",
-                "pos_product_name": "", "pos_official_name": "", "pos_printer_name": "",
+                "size_conflict": False, "identity_conflict": False, "pos_product_id": "",
+                "pos_sku": "", "pos_barcode": "", "pos_product_name": "",
+                "pos_official_name": "", "pos_printer_name": "",
             })
             continue
 
@@ -249,6 +260,7 @@ def match_import_names(
         exact_name = _clean_name(source.name) == evidence["name_key"]
         safe_auto = (
             not evidence["size_conflict"]
+            and not evidence["identity_conflict"]
             and not evidence["generic_candidate"]
             and best_score >= auto_threshold
             and (margin >= ambiguity_margin or exact_name or strong_core)
@@ -277,6 +289,7 @@ def match_import_names(
             "matched_pos_rows": len(best_products),
             "pos_identity_ambiguous": identity_ambiguous,
             "size_conflict": evidence["size_conflict"],
+            "identity_conflict": evidence["identity_conflict"],
             "pos_product_id": representative.product_id if expose_identity else "",
             "pos_sku": representative.sku if expose_identity else "",
             "pos_barcode": (representative.barcode or "") if expose_identity else "",
