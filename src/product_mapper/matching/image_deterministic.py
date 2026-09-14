@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
-
 from ..models import MatchCandidate, MatchResult, POSProduct, ProductImage, SupplierProduct
 from ..parsing.ocr_parser import parse_ocr_identity
 from ..vision.provider import OCRLine
@@ -48,7 +46,6 @@ def _identity_compatible(query: dict, identity: dict) -> tuple[bool, bool]:
 
 
 def _size_evidence_complete(query: dict, identity: dict) -> bool:
-    """Require both sides to either state size or omit size for strict identity use."""
     return bool(query["item_size"]) == bool(identity["item_size"])
 
 
@@ -243,37 +240,6 @@ def _best_indexed_identity(
     return max(valid, key=lambda item: (len(item[0]["tokens"]), int(item[1])))
 
 
-def find_ocr_review_candidates(
-    lines: list[OCRLine],
-    products: list[POSProduct],
-    top_k: int = 3,
-    evidence_index: ProductEvidenceIndex | None = None,
-) -> list[MatchCandidate]:
-    """Return deterministic OCR candidates for human review only."""
-    query = parse_ocr_identity(lines)
-    if len(query["tokens"]) < 2:
-        return []
-
-    index = evidence_index or ProductEvidenceIndex(products)
-    by_product: dict[str, list[IndexedProductIdentity]] = defaultdict(list)
-    for record in index.identities:
-        by_product[record.product.product_id].append(record)
-
-    ranked: list[tuple[int, int, str, POSProduct]] = []
-    for product_id, records in by_product.items():
-        best = _best_indexed_identity(records, query)
-        if best is None:
-            continue
-        identity, size_exact = best
-        ranked.append((len(identity["tokens"]), int(size_exact), product_id, records[0].product))
-
-    ranked.sort(key=lambda row: (-row[0], -row[1], row[2]))
-    return [
-        _candidate(product, "exact OCR tokens satisfy deterministic product rules")
-        for _, _, _, product in ranked[:top_k]
-    ]
-
-
 def _ocr_windows(lines: list[OCRLine], min_confidence: float = 0.65, max_window: int = 3) -> list[str]:
     accepted = [
         str(line.text).strip()
@@ -315,6 +281,41 @@ def find_ocr_exact_identity_candidates(
                 continue
             found[record.product.product_id] = record.product
     return [found[key] for key in sorted(found)]
+
+
+def find_ocr_review_candidates(
+    lines: list[OCRLine],
+    products: list[POSProduct],
+    top_k: int = 3,
+    evidence_index: ProductEvidenceIndex | None = None,
+) -> list[MatchCandidate]:
+    """Return deterministic OCR candidates for human review only."""
+    index = evidence_index or ProductEvidenceIndex(products)
+
+    exact_products = find_ocr_exact_identity_candidates(lines, products, index)
+    if exact_products:
+        return [
+            _candidate(product, "exact contiguous OCR label identity")
+            for product in exact_products[:top_k]
+        ]
+
+    query = parse_ocr_identity(lines)
+    if len(query["tokens"]) < 2:
+        return []
+
+    ranked: list[tuple[int, int, str, POSProduct]] = []
+    for product_id, records in index.by_product.items():
+        best = _best_indexed_identity(records, query)
+        if best is None:
+            continue
+        identity, size_exact = best
+        ranked.append((len(identity["tokens"]), int(size_exact), product_id, records[0].product))
+
+    ranked.sort(key=lambda row: (-row[0], -row[1], row[2]))
+    return [
+        _candidate(product, "OCR tokens satisfy deterministic review rules")
+        for _, _, _, product in ranked[:top_k]
+    ]
 
 
 def ocr_conflict_reason(
