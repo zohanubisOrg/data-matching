@@ -21,16 +21,17 @@ def _candidate(product: POSProduct, evidence: str) -> MatchCandidate:
     )
 
 
-def _candidate_products_from_row(row: dict, products: list[POSProduct]) -> list[POSProduct]:
+def _candidate_products_from_row(row: dict, index: ProductEvidenceIndex) -> list[POSProduct]:
     raw_ids = str(row.get("candidate_product_ids", ""))
     ids = [value.strip() for value in raw_ids.split("|") if value.strip()]
-    index = {product.product_id: product for product in products}
     result: list[POSProduct] = []
-    seen: set[str] = set()
+    seen_rows: set[int] = set()
     for product_id in ids:
-        if product_id in index and product_id not in seen:
-            result.append(index[product_id])
-            seen.add(product_id)
+        for product in index.by_id.get(product_id, []):
+            row_key = id(product)
+            if row_key not in seen_rows:
+                result.append(product)
+                seen_rows.add(row_key)
     return result
 
 
@@ -75,19 +76,19 @@ def _fast_exact_filename(
     if not records:
         return None
 
-    products: dict[str, POSProduct] = {}
-    incomplete_products: dict[str, POSProduct] = {}
+    matched_rows: dict[int, POSProduct] = {}
+    incomplete_rows: dict[int, POSProduct] = {}
     for record in records:
         compatible, _ = _identity_compatible(query, record.identity)
         if not compatible:
             continue
         if method == "canonical_exact" or _strict_core_identity(query, record.identity):
-            products[record.product.product_id] = record.product
+            matched_rows[record.row_index] = record.product
         else:
-            incomplete_products[record.product.product_id] = record.product
+            incomplete_rows[record.row_index] = record.product
 
-    if products:
-        ordered = [products[key] for key in sorted(products)]
+    if matched_rows:
+        ordered = [matched_rows[key] for key in sorted(matched_rows)]
         top = [_candidate(product, "deterministic indexed filename candidate") for product in ordered]
         if len(ordered) == 1:
             chosen = top[0]
@@ -110,12 +111,12 @@ def _fast_exact_filename(
             top_candidates=top,
             confidence=0.0,
             match_method="deterministic_filename_review",
-            reason="multiple deterministic indexed filename identities",
-            evidence=["deterministic filename candidates only; no fuzzy score used"],
+            reason="MULTIPLE_POS_ROWS_FOR_DETERMINISTIC_IDENTITY",
+            evidence=["deterministic filename candidates only; duplicate POS rows remain ambiguous"],
         )
 
-    if incomplete_products:
-        ordered = [incomplete_products[key] for key in sorted(incomplete_products)]
+    if incomplete_rows:
+        ordered = [incomplete_rows[key] for key in sorted(incomplete_rows)]
         return MatchResult(
             image=image,
             status="NEED_REVIEW",
@@ -155,17 +156,17 @@ def match_filename_deterministic(
     """Resolve an image filename through strict deterministic no-fuzzy rules.
 
     ``safe_subset`` remains available in the standalone import-name benchmark, but the
-    production image path treats it only as review evidence. Automatic image identity
-    requires canonical exact text or a core-exact identity with complete size evidence.
+    production image path treats it only as review evidence. Duplicate POS rows always
+    remain ambiguous even if their Product IDs are accidentally identical.
     """
     source_name = (image.raw_name or image.normalized_name or "").strip()
     if not source_name:
         return None
 
-    if evidence_index is not None:
-        fast = _fast_exact_filename(image, evidence_index)
-        if fast is not None:
-            return fast
+    index = evidence_index or ProductEvidenceIndex(products)
+    fast = _fast_exact_filename(image, index)
+    if fast is not None:
+        return fast
 
     supplier = SupplierProduct(
         name=source_name,
@@ -177,20 +178,19 @@ def match_filename_deterministic(
     if row.get("status") == "UNMATCHED":
         return None
 
-    candidate_products = _candidate_products_from_row(row, products)
+    candidate_products = _candidate_products_from_row(row, index)
     top = [_candidate(product, "deterministic canonical filename candidate") for product in candidate_products]
 
     product_id = str(row.get("pos_product_id", "")).strip()
-    by_id = evidence_index.by_id if evidence_index is not None else {product.product_id: product for product in products}
+    rows_for_id = index.by_id.get(product_id, []) if product_id else []
     method = str(row.get("match_method") or "")
     if (
         row.get("status") == "AUTO_MATCHED"
         and not row.get("pos_identity_ambiguous")
-        and product_id
-        and product_id in by_id
-        and _strict_fallback_auto_allowed(source_name, by_id[product_id], method)
+        and len(rows_for_id) == 1
+        and _strict_fallback_auto_allowed(source_name, rows_for_id[0], method)
     ):
-        chosen = _candidate(by_id[product_id], "unique strict deterministic filename identity")
+        chosen = _candidate(rows_for_id[0], "unique strict deterministic filename identity")
         return MatchResult(
             image=image,
             status="AUTO_MATCHED",
@@ -205,7 +205,10 @@ def match_filename_deterministic(
         )
 
     reason = str(row.get("reason") or "ambiguous deterministic filename identity")
-    if row.get("status") == "AUTO_MATCHED" and method == "safe_subset":
+    if product_id and len(rows_for_id) > 1:
+        reason = "DUPLICATE_POS_PRODUCT_ID_REQUIRES_REVIEW"
+        top = [_candidate(product, reason) for product in rows_for_id]
+    elif row.get("status") == "AUTO_MATCHED" and method == "safe_subset":
         reason = "SAFE_SUBSET_REQUIRES_REVIEW"
     elif row.get("status") == "AUTO_MATCHED" and method == "core_exact":
         reason = "INCOMPLETE_CORE_IDENTITY"
@@ -265,7 +268,7 @@ def find_ocr_exact_identity_candidates(
 ) -> list[POSProduct]:
     """Find strong OCR identities from short contiguous label-text windows."""
     index = evidence_index or ProductEvidenceIndex(products)
-    found: dict[str, POSProduct] = {}
+    found: dict[int, POSProduct] = {}
     for text in _ocr_windows(lines):
         query = _identity(text)
         full_records = index.by_full.get(query["full"], [])
@@ -281,7 +284,7 @@ def find_ocr_exact_identity_candidates(
                 continue
             if strict_core and not _strict_core_identity(query, record.identity):
                 continue
-            found[record.product.product_id] = record.product
+            found[record.row_index] = record.product
     return [found[key] for key in sorted(found)]
 
 
@@ -305,13 +308,13 @@ def find_ocr_review_candidates(
     if len(query["tokens"]) < 2:
         return []
 
-    ranked: list[tuple[int, int, str, POSProduct]] = []
-    for product_id, records in index.by_product.items():
+    ranked: list[tuple[int, int, int, POSProduct]] = []
+    for row_index, records in index.by_row.items():
         best = _best_indexed_identity(records, query)
         if best is None:
             continue
         identity, size_exact = best
-        ranked.append((len(identity["tokens"]), int(size_exact), product_id, records[0].product))
+        ranked.append((len(identity["tokens"]), int(size_exact), row_index, records[0].product))
 
     ranked.sort(key=lambda row: (-row[0], -row[1], row[2]))
     return [
