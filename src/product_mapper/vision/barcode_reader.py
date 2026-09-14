@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
 from PIL import Image, ImageOps
@@ -37,21 +37,38 @@ class BarcodeReader:
     def available(self) -> bool:
         return self._decoder is not None
 
-    def _variants(self, image: Image.Image) -> list[Image.Image]:
+    @staticmethod
+    def _resize_max(image: Image.Image, max_side: int) -> Image.Image:
+        longest = max(image.size)
+        if longest <= max_side:
+            return image.copy()
+        scale = max_side / longest
+        size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+        return image.resize(size, Image.Resampling.LANCZOS)
+
+    def _variants(self, image: Image.Image) -> Iterator[Image.Image]:
+        """Yield decoding passes without materializing several huge phone photos at once."""
         rgb = image.convert("RGB")
+        yield rgb
+
         gray = ImageOps.autocontrast(ImageOps.grayscale(rgb)).convert("RGB")
-        variants = [
-            rgb,
-            gray,
-            rgb.resize((rgb.width * 2, rgb.height * 2), Image.Resampling.LANCZOS),
-            gray.resize((gray.width * 3, gray.height * 3), Image.Resampling.LANCZOS),
-            rgb.rotate(90, expand=True),
-            rgb.rotate(180, expand=True),
-            rgb.rotate(270, expand=True),
-        ]
-        if self._max_passes is not None:
-            return variants[: max(0, self._max_passes)]
-        return variants
+        yield gray
+
+        # Upscaling helps small supplier images, but 2x/3x expansion of a 12MP phone
+        # photo is expensive and gives little benefit. Cap the working side instead.
+        longest = max(rgb.size)
+        if longest < 1600:
+            scale = min(2.0, 1600 / max(1, longest))
+            size = (max(1, round(rgb.width * scale)), max(1, round(rgb.height * scale)))
+            yield rgb.resize(size, Image.Resampling.LANCZOS)
+            yield gray.resize(size, Image.Resampling.LANCZOS)
+        else:
+            yield self._resize_max(gray, 2200)
+
+        rotation_base = self._resize_max(rgb, 2200)
+        yield rotation_base.rotate(90, expand=True)
+        yield rotation_base.rotate(180, expand=True)
+        yield rotation_base.rotate(270, expand=True)
 
     def analyze(self, path: Path) -> ImageAttributes:
         if self._decoder is None:
@@ -61,6 +78,8 @@ class BarcodeReader:
         warnings: list[str] = []
         with Image.open(path) as source:
             for index, variant in enumerate(self._variants(source), 1):
+                if self._max_passes is not None and index > max(0, self._max_passes):
+                    break
                 try:
                     values = self._decoder(variant)
                     decoded_values.extend(
@@ -70,6 +89,14 @@ class BarcodeReader:
                     )
                 except Exception as exc:
                     warnings.append(f"barcode_pass_{index}_failed:{type(exc).__name__}")
+                finally:
+                    # The original source is managed by Image.open; generated variants
+                    # can be released as soon as a pass is complete.
+                    if variant is not source:
+                        try:
+                            variant.close()
+                        except Exception:
+                            pass
 
         barcode = choose_barcode_consensus(decoded_values)
         checksum_valid = None
