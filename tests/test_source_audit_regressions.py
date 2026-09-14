@@ -6,7 +6,7 @@ from product_mapper.models import POSProduct, ProductImage
 from product_mapper.parsing.filename_parser import parse_filename
 from product_mapper.pipeline import build_barcode_index, resolve_capture_evidence
 from product_mapper.vision.barcode_reader import BarcodeReader
-from product_mapper.vision.provider import ImageAttributes, NoOpVisionProvider
+from product_mapper.vision.provider import ImageAttributes, NoOpVisionProvider, OCRLine
 
 
 VALID_EAN13 = "4006381333931"
@@ -155,3 +155,43 @@ def test_checksum_valid_gtin13_matches_equivalent_zero_padded_gtin14(tmp_path):
     assert result.status == "AUTO_MATCHED"
     assert result.candidate is not None
     assert result.candidate.product.barcode == VALID_GTIN14_EQUIVALENT
+
+
+def test_back_ocr_is_fallback_only_when_front_ocr_has_no_text(tmp_path):
+    front_path = tmp_path / "000123_front.jpg"
+    back_path = tmp_path / "000123_back.jpg"
+    Image.new("RGB", (16, 16), "white").save(front_path)
+    Image.new("RGB", (16, 16), "white").save(back_path)
+    front = image(front_path, "000123", "front")
+    back = image(back_path, "000123", "back")
+    pos = product()
+
+    class EmptyBarcodeReader:
+        def analyze(self, _: Path) -> ImageAttributes:
+            return ImageAttributes()
+
+    class OCRProvider:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def analyze(self, path: Path) -> ImageAttributes:
+            self.calls.append(path.name)
+            if path.name.endswith("_front.jpg"):
+                return ImageAttributes()
+            return ImageAttributes(ocr_lines=[
+                OCRLine("GREEN TEA APPLE", 0.99),
+                OCRLine("500 ML", 0.98),
+            ])
+
+    ocr = OCRProvider()
+    results = resolve_capture_evidence(
+        [front, back],
+        [pos],
+        EmptyBarcodeReader(),
+        ocr,
+        barcode_index=build_barcode_index([pos]),
+    )
+
+    assert {result.status for result in results} == {"NEED_REVIEW"}
+    assert [candidate.product.product_id for candidate in results[0].top_candidates] == ["1"]
+    assert ocr.calls == ["000123_front.jpg", "000123_back.jpg"]
