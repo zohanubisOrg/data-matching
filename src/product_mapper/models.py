@@ -41,6 +41,8 @@ class ProductImage(BaseModel):
     brand: str | None = None
     variants: set[str] = Field(default_factory=set)
     packaging: Packaging = Field(default_factory=Packaging)
+    capture_id: str | None = None
+    image_side: str | None = None
 
 
 class MatchCandidate(BaseModel):
@@ -76,4 +78,3 @@ class DataQualityIssue(BaseModel):
     value: str = ""
     count: int = 1
     details: str = ""
-
