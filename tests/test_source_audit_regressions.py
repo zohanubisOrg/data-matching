@@ -10,6 +10,7 @@ from product_mapper.vision.provider import ImageAttributes, NoOpVisionProvider
 
 
 VALID_EAN13 = "4006381333931"
+VALID_GTIN14_EQUIVALENT = "04006381333931"
 INVALID_EAN13 = "4006381333932"
 
 
@@ -115,3 +116,29 @@ def test_barcode_index_preserves_duplicate_pos_identity_for_review():
     index = build_barcode_index([first, second])
 
     assert [item.product_id for item in index[VALID_EAN13]] == ["1", "2"]
+
+
+def test_checksum_valid_gtin13_matches_equivalent_zero_padded_gtin14(tmp_path):
+    path = tmp_path / "barcode.jpg"
+    Image.new("RGB", (16, 16), "white").save(path)
+    pos = product(barcode=VALID_GTIN14_EQUIVALENT)
+
+    class Reader:
+        def analyze(self, _: Path) -> ImageAttributes:
+            return ImageAttributes(
+                barcode=VALID_EAN13,
+                barcode_candidates=[VALID_EAN13],
+                barcode_checksum_valid=True,
+            )
+
+    result = resolve_capture_evidence(
+        [image(path)],
+        [pos],
+        Reader(),
+        NoOpVisionProvider(),
+        barcode_index=build_barcode_index([pos]),
+    )[0]
+
+    assert result.status == "AUTO_MATCHED"
+    assert result.candidate is not None
+    assert result.candidate.product.barcode == VALID_GTIN14_EQUIVALENT
