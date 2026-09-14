@@ -15,7 +15,7 @@ from .matching.image_deterministic import (
     match_filename_deterministic,
     ocr_conflict_reason,
 )
-from .matching.knowledge_base import load_knowledge_base
+from .matching.knowledge_base import load_knowledge_base, resolve_approved_mapping
 from .matching.product_index import ProductEvidenceIndex
 from .models import DataQualityIssue, MatchCandidate, MatchResult, POSProduct, ProductImage
 from .reporting.excel_report import write_reports
@@ -327,8 +327,6 @@ def _resolve_capture_from_evidence(
             )
 
         selected = hits[0]
-        # Barcode verification uses the front label only. Back-label OCR is too noisy to
-        # overrule a checksum-valid unique GTIN.
         ocr_evidence = _analyze_capture_ocr(ocr_provider, images, allow_back_fallback=False)
         if ocr_evidence.ocr_lines:
             conflict = ocr_conflict_reason(
@@ -399,8 +397,6 @@ def _resolve_capture_from_evidence(
     if filename_result is not None and filename_result.status == "AUTO_MATCHED":
         return filename_result.model_copy(update={"image": representative})
 
-    # With no barcode identity, one back image may be used as OCR recovery evidence if
-    # the front label produced no text at all. OCR remains review-only.
     ocr_evidence = _analyze_capture_ocr(ocr_provider, images, allow_back_fallback=True)
     ocr_candidates = find_ocr_review_candidates(
         ocr_evidence.ocr_lines,
@@ -484,6 +480,17 @@ def resolve_image_evidence(
     )[0]
 
 
+def _dedupe_rows(products: list[POSProduct]) -> list[POSProduct]:
+    result: list[POSProduct] = []
+    seen: set[int] = set()
+    for product in products:
+        key = id(product)
+        if key not in seen:
+            result.append(product)
+            seen.add(key)
+    return result
+
+
 def _human_group_result(
     images: list[ProductImage],
     products: list[POSProduct],
@@ -491,7 +498,13 @@ def _human_group_result(
     filename_counts: Counter[str],
     barcode_index: BarcodeIndex,
 ) -> list[MatchResult] | None:
-    """Apply human decisions only when filename keys are globally unambiguous."""
+    """Apply exact human decisions only when filename keys are globally unambiguous.
+
+    New knowledge entries carry Product ID + SKU + Barcode, allowing a reviewer to
+    disambiguate duplicated barcodes deterministically. Legacy barcode-only entries are
+    still accepted but remain review-only when the current POS barcode is non-unique.
+    """
+    del barcode_index  # kept in the signature for backward compatibility
     entries = [
         kb[image.filename]
         for image in images
@@ -500,15 +513,42 @@ def _human_group_result(
     if not entries:
         return None
 
-    approved = {normalize_barcode(entry.get("barcode")) for entry in entries if entry.get("barcode")}
-    no_match = any(entry.get("selection") == "No Match" for entry in entries)
     representative = images[0]
+    no_match_entries = [entry for entry in entries if str(entry.get("selection") or "").casefold() == "no match"]
+    approved_entries = [
+        entry
+        for entry in entries
+        if any(str(entry.get(field) or "").strip() for field in ("product_id", "sku", "barcode"))
+    ]
 
-    if len(approved) == 1 and not no_match:
-        approved_barcode = next(iter(approved))
-        hits = _barcode_hits(approved_barcode, products, barcode_index)
-        if len(hits) == 1:
-            candidate = _candidate(hits[0], "human-approved decision from knowledge base")
+    if no_match_entries and approved_entries:
+        result = _review(
+            representative,
+            "human_approved_conflict",
+            "conflicting human decisions within one product capture",
+            evidence=["capture contains both approved identity and No Match decisions"],
+        )
+        return _copy_result_for_images(result, images)
+
+    if approved_entries:
+        resolved_rows: list[POSProduct] = []
+        review_rows: list[POSProduct] = []
+        all_unique = True
+        for entry in approved_entries:
+            hits = resolve_approved_mapping(entry, products)
+            review_rows.extend(hits)
+            if len(hits) == 1:
+                resolved_rows.append(hits[0])
+            else:
+                all_unique = False
+
+        unique_resolved = _dedupe_rows(resolved_rows)
+        if all_unique and len(unique_resolved) == 1:
+            selected = unique_resolved[0]
+            candidate = _candidate(
+                selected,
+                "human-approved exact POS identity tuple from knowledge base",
+            )
             result = MatchResult(
                 image=representative,
                 status="AUTO_MATCHED",
@@ -518,19 +558,20 @@ def _human_group_result(
                 top2_score=0.0,
                 margin=1.0,
                 match_method="exact_human_approved",
-                reason="human verified mapping",
+                reason="human verified Product ID/SKU/Barcode identity",
                 evidence=candidate.evidence,
             )
         else:
             result = _review(
                 representative,
                 "human_approved_conflict",
-                "approved barcode is missing or non-unique in current POS",
-                hits,
+                "approved identity is missing, non-unique, or inconsistent in current POS",
+                _dedupe_rows(review_rows + unique_resolved),
+                ["human approval was retained but current POS no longer resolves it to one row"],
             )
         return _copy_result_for_images(result, images)
 
-    if no_match and not approved:
+    if no_match_entries:
         result = MatchResult(
             image=representative,
             status="UNMATCHED",
@@ -543,8 +584,8 @@ def _human_group_result(
     result = _review(
         representative,
         "human_approved_conflict",
-        "conflicting human decisions within one product capture",
-        evidence=["approved barcodes: " + " | ".join(sorted(approved))] if approved else [],
+        "knowledge-base decision is incomplete",
+        evidence=["decision contains neither exact POS identity nor No Match"],
     )
     return _copy_result_for_images(result, images)
 
