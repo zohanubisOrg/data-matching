@@ -47,6 +47,19 @@ def test_front_back_capture_filename_is_valid_without_supplier_name(tmp_path):
     assert parsed.source_product_id == "000123"
 
 
+def test_front_back_supplier_filename_keeps_product_name_evidence(tmp_path):
+    path = tmp_path / "heuschen_11108_pineapple_in_heavy_syrup_front.jpg"
+    Image.new("RGB", (16, 16), "white").save(path)
+
+    parsed = parse_filename(path)
+
+    assert parsed.capture_id == "heuschen_11108_pineapple_in_heavy_syrup"
+    assert parsed.image_side == "front"
+    assert parsed.source == "heuschen"
+    assert parsed.source_product_id == "11108"
+    assert parsed.raw_name == "pineapple_in_heavy_syrup"
+
+
 def test_generic_valid_image_filename_is_not_rejected(tmp_path):
     path = tmp_path / "random-camera-photo.jpg"
     Image.new("RGB", (16, 16), "white").save(path)
