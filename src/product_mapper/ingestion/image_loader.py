@@ -1,5 +1,5 @@
 import hashlib
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from PIL import Image
@@ -18,20 +18,40 @@ def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+def _duplicate_content_issues(paths_by_size: dict[int, list[Path]]) -> list[DataQualityIssue]:
+    """Hash only same-size files; exact byte duplicates must have identical size."""
+    hashes: Counter[str] = Counter()
+    for paths in paths_by_size.values():
+        if len(paths) < 2:
+            continue
+        for path in paths:
+            hashes[_sha256_file(path)] += 1
+    return [
+        DataQualityIssue(issue_type="duplicate image content", value=digest, count=count)
+        for digest, count in hashes.items()
+        if count > 1
+    ]
+
+
 def load_images(directories: list[Path]) -> tuple[list[ProductImage], list[DataQualityIssue], dict]:
     results: list[ProductImage] = []
     issues: list[DataQualityIssue] = []
-    hashes: Counter[str] = Counter()
     filenames: Counter[str] = Counter()
+    extensions: Counter[str] = Counter()
+    image_paths_by_size: dict[int, list[Path]] = defaultdict(list)
 
     for directory in directories:
         for path in sorted(directory.rglob("*")):
-            if not path.is_file() or path.suffix.casefold() not in _IMAGE_SUFFIXES:
+            if not path.is_file():
                 continue
+            suffix = path.suffix.casefold()
+            if suffix not in _IMAGE_SUFFIXES:
+                continue
+            extensions[suffix] += 1
             try:
                 with Image.open(path) as image:
                     image.verify()
-                hashes[_sha256_file(path)] += 1
+                image_paths_by_size[path.stat().st_size].append(path)
                 filenames[path.name.casefold()] += 1
                 results.append(parse_filename(path))
             except Exception as exc:
@@ -43,9 +63,8 @@ def load_images(directories: list[Path]) -> tuple[list[ProductImage], list[DataQ
                     )
                 )
 
-    for digest, count in hashes.items():
-        if count > 1:
-            issues.append(DataQualityIssue(issue_type="duplicate image content", value=digest, count=count))
+    issues.extend(_duplicate_content_issues(image_paths_by_size))
+
     for filename, count in filenames.items():
         if count > 1:
             issues.append(
@@ -58,14 +77,17 @@ def load_images(directories: list[Path]) -> tuple[list[ProductImage], list[DataQ
                 )
             )
 
-    all_files = [p for d in directories for p in d.rglob("*") if p.is_file()]
-    parse_failures = sum(i.issue_type == "invalid image or filename" for i in issues)
+    parse_failures = sum(issue.issue_type == "invalid image or filename" for issue in issues)
     return results, issues, {
         "total": len(results),
-        "directories": {d.name: sum(1 for x in results if d in x.path.parents) for d in directories},
-        "extensions": dict(Counter(p.suffix.casefold() for p in all_files)),
-        "sources": dict(Counter(x.source for x in results)),
+        "directories": {
+            directory.name: sum(1 for image in results if directory in image.path.parents)
+            for directory in directories
+        },
+        "extensions": dict(extensions),
+        "sources": dict(Counter(image.source for image in results)),
         "parse_success": len(results),
         "parse_failures": parse_failures,
         "duplicate_filenames": sum(1 for count in filenames.values() if count > 1),
+        "duplicate_hash_candidates": sum(len(paths) for paths in image_paths_by_size.values() if len(paths) > 1),
     }
