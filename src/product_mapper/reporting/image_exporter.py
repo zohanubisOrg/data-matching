@@ -35,174 +35,174 @@ def _format_worksheet(ws, headers: list[str], rows: list[list[object]]) -> None:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 
 
+def _copy_image(source: Path, targets: list[Path], copy_failures: set[str]) -> None:
+    try:
+        for target in targets:
+            shutil.copy2(source, target)
+    except Exception as exc:
+        copy_failures.add(str(source))
+        logger.error("Failed to copy image %s: %s", source, exc)
+
+
 def export_standard_deliverables(
     results: list[MatchResult],
     output_dir: Path,
     total_pos_count: int = 0,
 ) -> dict:
-    """
-    Exports final client deliverables satisfying the 15 Output Acceptance Criteria:
-    /output
-    |-- matched-images/ & images/
-    |   |-- <barcode>.jpg (or <barcode>_2.jpg for multiple images)
-    |-- unmatched-images/
-    |   |-- <original_image_name>.jpg
-    |-- review/
-    |-- unmatched/
-    |-- result.xlsx / result.csv (7-column canonical client deliverable)
-    |-- mapping.xlsx / mapping.csv (12-column comprehensive audit trail)
-    |-- reconciliation_report.txt
-    """
+    """Export client deliverables without making unmeasured accuracy claims."""
     matched_dir = output_dir / "matched-images"
     images_dir = output_dir / "images"
     unmatched_dir = output_dir / "unmatched-images"
     review_dir = output_dir / "review"
     unmatched_sub_dir = output_dir / "unmatched"
 
-    for d in (matched_dir, images_dir, unmatched_dir, review_dir, unmatched_sub_dir):
-        d.mkdir(parents=True, exist_ok=True)
-        for old_file in d.glob("*.*"):
+    for directory in (matched_dir, images_dir, unmatched_dir, review_dir, unmatched_sub_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+        for old_file in directory.glob("*.*"):
             try:
                 old_file.unlink()
-            except Exception:
-                pass
-
+            except Exception as exc:
+                logger.warning("Could not remove stale output file %s: %s", old_file, exc)
 
     barcode_counts: dict[str, int] = {}
-    image_to_barcode: dict[str, str] = {}
+    image_to_barcode: dict[Path, str] = {}
     conflict_count = 0
+    copy_failures: set[str] = set()
 
     deliverable_rows: list[dict[str, str]] = []
     mapping_rows: list[dict[str, str]] = []
 
-    # First pass: conflict check (ensure one image is not claimed by two different barcodes)
-    for r in results:
-        status = r.status
-        if status == "AUTO_MATCHED" and r.candidate and r.candidate.product.barcode:
-            bc = r.candidate.product.barcode.strip()
-            orig_img = r.image.path.resolve()
-            if orig_img in image_to_barcode and image_to_barcode[orig_img] != bc:
+    # Ensure one physical image is never silently claimed by two different barcodes.
+    for result in results:
+        if result.status == "AUTO_MATCHED" and result.candidate and result.candidate.product.barcode:
+            barcode = result.candidate.product.barcode.strip()
+            original_image = result.image.path.resolve()
+            if original_image in image_to_barcode and image_to_barcode[original_image] != barcode:
                 logger.warning(
                     "Conflict detected: Image %s claimed by barcode %s and %s. Downgrading to REVIEW.",
-                    r.image.filename,
-                    image_to_barcode[orig_img],
-                    bc,
+                    result.image.filename,
+                    image_to_barcode[original_image],
+                    barcode,
                 )
-                r.status = "NEED_REVIEW"
-                r.reason = f"Conflict: image assigned to multiple barcodes ({image_to_barcode[orig_img]} and {bc})"
+                result.status = "NEED_REVIEW"
+                result.reason = (
+                    f"Conflict: image assigned to multiple barcodes "
+                    f"({image_to_barcode[original_image]} and {barcode})"
+                )
                 conflict_count += 1
             else:
-                image_to_barcode[orig_img] = bc
+                image_to_barcode[original_image] = barcode
 
     matched_count = 0
     review_count = 0
     unmatched_count = 0
     error_count = 0
 
-    for r in results:
-        status = r.status
-        orig_img_name = r.image.filename
-        source_path = r.image.path
-        supplier_name = r.image.source or ""
-        supplier_sku = r.image.source_product_id or ""
+    for result in results:
+        status = result.status
+        original_image_name = result.image.filename
+        source_path = result.image.path
+        supplier_name = result.image.source or ""
+        supplier_sku = result.image.source_product_id or ""
 
-        if status == "AUTO_MATCHED" and r.candidate and r.candidate.product.barcode:
-            barcode = r.candidate.product.barcode.strip()
-            sku = r.candidate.product.sku.strip()
-            prod_id = r.candidate.product.product_id.strip()
-            orig_name = r.candidate.product.product_name.strip()
-            final_name = (r.candidate.product.official_name or r.candidate.product.product_name).strip()
+        if status == "AUTO_MATCHED" and result.candidate and result.candidate.product.barcode:
+            barcode = result.candidate.product.barcode.strip()
+            sku = result.candidate.product.sku.strip()
+            product_id = result.candidate.product.product_id.strip()
+            original_name = result.candidate.product.product_name.strip()
+            final_name = (result.candidate.product.official_name or result.candidate.product.product_name).strip()
 
             suffix = source_path.suffix.lower() or ".jpg"
-            idx = barcode_counts.get(barcode, 0) + 1
-            barcode_counts[barcode] = idx
-            final_img_name = f"{barcode}{suffix}" if idx == 1 else f"{barcode}_{idx}{suffix}"
+            index = barcode_counts.get(barcode, 0) + 1
+            barcode_counts[barcode] = index
+            final_image_name = f"{barcode}{suffix}" if index == 1 else f"{barcode}_{index}{suffix}"
 
-            # Copy to matched-images and images/
-            try:
-                shutil.copy2(source_path, matched_dir / final_img_name)
-                shutil.copy2(source_path, images_dir / final_img_name)
-            except Exception as e:
-                logger.error("Failed to copy matched image %s -> %s: %s", source_path, final_img_name, e)
+            _copy_image(
+                source_path,
+                [matched_dir / final_image_name, images_dir / final_image_name],
+                copy_failures,
+            )
 
             deliverable_rows.append({
                 "Barcode": barcode,
                 "SKU": sku,
-                "Original Name": orig_name,
+                "Original Name": original_name,
                 "Final Name": final_name,
-                "Original Image": orig_img_name,
-                "Final Image": final_img_name,
+                "Original Image": original_image_name,
+                "Final Image": final_image_name,
                 "Status": "MATCHED",
             })
             mapping_rows.append({
                 "barcode": barcode,
                 "pos_sku": sku,
-                "product_id": prod_id,
-                "source_name": orig_name,
+                "product_id": product_id,
+                "source_name": original_name,
                 "normalized_name": final_name,
                 "supplier": supplier_name,
                 "supplier_sku": supplier_sku,
-                "original_image": orig_img_name,
-                "final_image": final_img_name,
-                "match_method": r.match_method,
-                "match_score": f"{r.confidence:.4f}",
+                "original_image": original_image_name,
+                "final_image": final_image_name,
+                "match_method": result.match_method,
+                "match_score": f"{result.confidence:.4f}",
                 "status": "MATCHED",
             })
             matched_count += 1
 
         elif status == "NEED_REVIEW":
-            barcode = r.candidate.product.barcode.strip() if (r.candidate and r.candidate.product.barcode) else ""
-            sku = r.candidate.product.sku.strip() if (r.candidate and r.candidate.product.sku) else ""
-            prod_id = r.candidate.product.product_id.strip() if r.candidate else ""
-            orig_name = r.candidate.product.product_name.strip() if r.candidate else r.image.raw_name
-            final_name = (r.candidate.product.official_name or r.candidate.product.product_name).strip() if r.candidate else r.image.normalized_name
+            barcode = result.candidate.product.barcode.strip() if (result.candidate and result.candidate.product.barcode) else ""
+            sku = result.candidate.product.sku.strip() if (result.candidate and result.candidate.product.sku) else ""
+            product_id = result.candidate.product.product_id.strip() if result.candidate else ""
+            original_name = result.candidate.product.product_name.strip() if result.candidate else result.image.raw_name
+            final_name = (
+                (result.candidate.product.official_name or result.candidate.product.product_name).strip()
+                if result.candidate
+                else result.image.normalized_name
+            )
 
-            # Copy to unmatched-images and review/
-            try:
-                shutil.copy2(source_path, unmatched_dir / orig_img_name)
-                shutil.copy2(source_path, review_dir / orig_img_name)
-            except Exception as e:
-                logger.error("Failed to copy review image %s: %s", source_path, e)
+            _copy_image(
+                source_path,
+                [unmatched_dir / original_image_name, review_dir / original_image_name],
+                copy_failures,
+            )
 
             deliverable_rows.append({
                 "Barcode": barcode,
                 "SKU": sku,
-                "Original Name": orig_name,
+                "Original Name": original_name,
                 "Final Name": final_name,
-                "Original Image": orig_img_name,
+                "Original Image": original_image_name,
                 "Final Image": "",
                 "Status": "REVIEW",
             })
             mapping_rows.append({
                 "barcode": barcode,
                 "pos_sku": sku,
-                "product_id": prod_id,
-                "source_name": orig_name,
+                "product_id": product_id,
+                "source_name": original_name,
                 "normalized_name": final_name,
                 "supplier": supplier_name,
                 "supplier_sku": supplier_sku,
-                "original_image": orig_img_name,
+                "original_image": original_image_name,
                 "final_image": "",
-                "match_method": r.match_method,
-                "match_score": f"{r.confidence:.4f}",
+                "match_method": result.match_method,
+                "match_score": f"{result.confidence:.4f}",
                 "status": "REVIEW_REQUIRED",
             })
             review_count += 1
 
         elif status == "UNMATCHED":
-            # Copy to unmatched-images and unmatched/
-            try:
-                shutil.copy2(source_path, unmatched_dir / orig_img_name)
-                shutil.copy2(source_path, unmatched_sub_dir / orig_img_name)
-            except Exception as e:
-                logger.error("Failed to copy unmatched image %s: %s", source_path, e)
+            _copy_image(
+                source_path,
+                [unmatched_dir / original_image_name, unmatched_sub_dir / original_image_name],
+                copy_failures,
+            )
 
             deliverable_rows.append({
                 "Barcode": "",
                 "SKU": "",
-                "Original Name": r.image.raw_name or r.image.normalized_name,
-                "Final Name": r.image.normalized_name,
-                "Original Image": orig_img_name,
+                "Original Name": result.image.raw_name or result.image.normalized_name,
+                "Final Name": result.image.normalized_name,
+                "Original Image": original_image_name,
                 "Final Image": "",
                 "Status": "UNMATCHED",
             })
@@ -210,30 +210,26 @@ def export_standard_deliverables(
                 "barcode": "",
                 "pos_sku": "",
                 "product_id": "",
-                "source_name": r.image.raw_name or r.image.normalized_name,
-                "normalized_name": r.image.normalized_name,
+                "source_name": result.image.raw_name or result.image.normalized_name,
+                "normalized_name": result.image.normalized_name,
                 "supplier": supplier_name,
                 "supplier_sku": supplier_sku,
-                "original_image": orig_img_name,
+                "original_image": original_image_name,
                 "final_image": "",
                 "match_method": "none",
-                "match_score": f"{r.confidence:.4f}",
+                "match_score": f"{result.confidence:.4f}",
                 "status": "UNMATCHED",
             })
             unmatched_count += 1
 
-        else:  # ERROR
-            try:
-                shutil.copy2(source_path, unmatched_dir / orig_img_name)
-            except Exception as e:
-                logger.error("Failed to copy error image %s: %s", source_path, e)
-
+        else:
+            _copy_image(source_path, [unmatched_dir / original_image_name], copy_failures)
             deliverable_rows.append({
                 "Barcode": "",
                 "SKU": "",
-                "Original Name": r.image.raw_name,
-                "Final Name": r.image.normalized_name,
-                "Original Image": orig_img_name,
+                "Original Name": result.image.raw_name,
+                "Final Name": result.image.normalized_name,
+                "Original Image": original_image_name,
                 "Final Image": "",
                 "Status": "ERROR",
             })
@@ -241,11 +237,11 @@ def export_standard_deliverables(
                 "barcode": "",
                 "pos_sku": "",
                 "product_id": "",
-                "source_name": r.image.raw_name,
-                "normalized_name": r.image.normalized_name,
+                "source_name": result.image.raw_name,
+                "normalized_name": result.image.normalized_name,
                 "supplier": supplier_name,
                 "supplier_sku": supplier_sku,
-                "original_image": orig_img_name,
+                "original_image": original_image_name,
                 "final_image": "",
                 "match_method": "error",
                 "match_score": "0.0000",
@@ -253,93 +249,94 @@ def export_standard_deliverables(
             })
             error_count += 1
 
-    # 1. Write result.xlsx & result.csv (7-column standard deliverable)
     headers_7 = ["Barcode", "SKU", "Original Name", "Final Name", "Original Image", "Final Image", "Status"]
-    table_rows_7 = [
-        [row["Barcode"], row["SKU"], row["Original Name"], row["Final Name"], row["Original Image"], row["Final Image"], row["Status"]]
-        for row in deliverable_rows
-    ]
-    wb_res = Workbook()
-    ws_res = wb_res.active
-    ws_res.title = "Result"
-    _format_worksheet(ws_res, headers_7, table_rows_7)
+    table_rows_7 = [[row[header] for header in headers_7] for row in deliverable_rows]
+    result_workbook = Workbook()
+    result_sheet = result_workbook.active
+    result_sheet.title = "Result"
+    _format_worksheet(result_sheet, headers_7, table_rows_7)
     try:
-        wb_res.save(output_dir / "result.xlsx")
+        result_workbook.save(output_dir / "result.xlsx")
     except PermissionError:
         logger.warning("Permission denied writing result.xlsx (file open in Excel). Saved to result_updated.xlsx")
-        wb_res.save(output_dir / "result_updated.xlsx")
+        result_workbook.save(output_dir / "result_updated.xlsx")
 
-    with (output_dir / "result.csv").open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=headers_7)
+    with (output_dir / "result.csv").open("w", newline="", encoding="utf-8-sig") as stream:
+        writer = csv.DictWriter(stream, fieldnames=headers_7)
         writer.writeheader()
         writer.writerows(deliverable_rows)
 
-    # 2. Write mapping.xlsx & mapping.csv (12-column comprehensive audit trail)
-    headers_12 = ["barcode", "pos_sku", "product_id", "source_name", "normalized_name", "supplier", "supplier_sku", "original_image", "final_image", "match_method", "match_score", "status"]
-    table_rows_12 = [
-        [row[h] for h in headers_12]
-        for row in mapping_rows
+    headers_12 = [
+        "barcode", "pos_sku", "product_id", "source_name", "normalized_name",
+        "supplier", "supplier_sku", "original_image", "final_image",
+        "match_method", "match_score", "status",
     ]
-    wb_map = Workbook()
-    ws_map = wb_map.active
-    ws_map.title = "Mapping"
-    _format_worksheet(ws_map, headers_12, table_rows_12)
+    table_rows_12 = [[row[header] for header in headers_12] for row in mapping_rows]
+    mapping_workbook = Workbook()
+    mapping_sheet = mapping_workbook.active
+    mapping_sheet.title = "Mapping"
+    _format_worksheet(mapping_sheet, headers_12, table_rows_12)
     try:
-        wb_map.save(output_dir / "mapping.xlsx")
+        mapping_workbook.save(output_dir / "mapping.xlsx")
     except PermissionError:
         logger.warning("Permission denied writing mapping.xlsx (file open in Excel). Saved to mapping_updated.xlsx")
-        wb_map.save(output_dir / "mapping_updated.xlsx")
+        mapping_workbook.save(output_dir / "mapping_updated.xlsx")
 
-    with (output_dir / "mapping.csv").open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=headers_12)
+    with (output_dir / "mapping.csv").open("w", newline="", encoding="utf-8-sig") as stream:
+        writer = csv.DictWriter(stream, fieldnames=headers_12)
         writer.writeheader()
         writer.writerows(mapping_rows)
 
-
-    # 3. Write reconciliation_report.txt
     total_images = len(results)
-    matched_pos_barcodes = set(r["Barcode"] for r in deliverable_rows if r["Status"] == "MATCHED" and r["Barcode"])
+    matched_pos_barcodes = {
+        row["Barcode"]
+        for row in deliverable_rows
+        if row["Status"] == "MATCHED" and row["Barcode"]
+    }
+    percent = lambda count: (count / total_images * 100.0) if total_images else 0.0
+    reconciled = matched_count + review_count + unmatched_count + error_count
+    reconciliation_state = "PASS" if reconciled == total_images else "FAIL"
+    conflict_state = "PASS" if conflict_count == 0 else "REVIEW REQUIRED"
+    copy_state = "PASS" if not copy_failures else "FAIL"
 
     recon_report = f"""================================================================================
-FINAL DATA MATCHING & RECONCILIATION REPORT (DoD COMPLIANCE)
+FINAL DATA MATCHING & RECONCILIATION REPORT
 ================================================================================
 
-1. IMAGES ACCOUNTING (100% Accounted For)
+1. IMAGES ACCOUNTING
 --------------------------------------------------------------------------------
 Total Input Images Processed:       {total_images}
-  - MATCHED (in /matched-images/):  {matched_count} ({matched_count/total_images*100:.1f}%)
-  - REVIEW (in /unmatched-images/):  {review_count} ({review_count/total_images*100:.1f}%)
-  - UNMATCHED (in /unmatched-images):{unmatched_count} ({unmatched_count/total_images*100:.1f}%)
-  - ERROR / INVALID:                 {error_count} (0.0%)
+  - MATCHED (in /matched-images/):  {matched_count} ({percent(matched_count):.1f}%)
+  - REVIEW (in /unmatched-images/): {review_count} ({percent(review_count):.1f}%)
+  - UNMATCHED:                      {unmatched_count} ({percent(unmatched_count):.1f}%)
+  - ERROR / INVALID:                {error_count} ({percent(error_count):.1f}%)
   ------------------------------------------------------------------------------
-  Reconciled Check:                  {matched_count + review_count + unmatched_count + error_count} / {total_images} [PASS]
+  Reconciled Check:                 {reconciled} / {total_images} [{reconciliation_state}]
 
 2. POS PRODUCTS ACCOUNTING
 --------------------------------------------------------------------------------
 Total POS Products in System:       {total_pos_count}
-  - Unique POS Products with Image:  {len(matched_pos_barcodes)}
-  - POS Products without Image:      {total_pos_count - len(matched_pos_barcodes) if total_pos_count else 'N/A'}
+  - Unique matched POS barcodes:    {len(matched_pos_barcodes)}
+  - POS rows without matched image: {total_pos_count - len(matched_pos_barcodes) if total_pos_count else 'N/A'}
   ------------------------------------------------------------------------------
-  Barcode & SKU Integrity:           100% Unaltered [PASS]
+  Barcode & SKU handling:           Preserved from POS records; never synthesized.
 
 3. IMAGE & QUALITY SAFEGUARDS
 --------------------------------------------------------------------------------
-Duplicate Image Conflicts:          0 [PASS - Zero silent overwrites]
-Output Standardized Filenames:      100% <barcode>.jpg or <barcode>_X.jpg
-Final Matched Accuracy:             100% (Strict non-ambiguous matches only)
-Deliverables Generated:
-  - {output_dir / 'matched-images'}
-  - {output_dir / 'images'}
-  - {output_dir / 'unmatched-images'}
-  - {output_dir / 'review'}
-  - {output_dir / 'unmatched'}
-  - {output_dir / 'result.xlsx'} / {output_dir / 'result.csv'}
-  - {output_dir / 'mapping.xlsx'} / {output_dir / 'mapping.csv'}
+Duplicate image conflicts:          {conflict_count} [{conflict_state}]
+Output copy failures:               {len(copy_failures)} [{copy_state}]
+Output naming policy:               <barcode>.<ext> or <barcode>_N.<ext>
+Gold-dataset accuracy:              NOT MEASURED
+Final Matched Accuracy:             NOT MEASURED (requires gold dataset or human verification)
+
+The strict matcher is designed to maximize precision by sending uncertain evidence to
+REVIEW/UNMATCHED. This report intentionally does not infer 100% accuracy from matching
+rules alone.
 ================================================================================
 """
     (output_dir / "reconciliation_report.txt").write_text(recon_report, encoding="utf-8")
 
-    logger.info("Deliverables exported successfully:\n%s", recon_report)
+    logger.info("Deliverables exported:\n%s", recon_report)
     return {
         "total_images": total_images,
         "matched_count": matched_count,
@@ -347,5 +344,6 @@ Deliverables Generated:
         "unmatched_count": unmatched_count,
         "error_count": error_count,
         "conflict_count": conflict_count,
+        "copy_failure_count": len(copy_failures),
         "matched_pos_count": len(matched_pos_barcodes),
     }
