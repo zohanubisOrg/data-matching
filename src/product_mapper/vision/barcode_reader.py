@@ -47,15 +47,15 @@ class BarcodeReader:
         return image.resize(size, Image.Resampling.LANCZOS)
 
     def _variants(self, image: Image.Image) -> Iterator[Image.Image]:
-        """Yield decoding passes without materializing several huge phone photos at once."""
+        """Yield decoding passes without creating 2x/3x copies of large phone photos."""
         rgb = image.convert("RGB")
-        yield rgb
-
         gray = ImageOps.autocontrast(ImageOps.grayscale(rgb)).convert("RGB")
+
+        yield rgb
         yield gray
 
-        # Upscaling helps small supplier images, but 2x/3x expansion of a 12MP phone
-        # photo is expensive and gives little benefit. Cap the working side instead.
+        # Upscaling helps small supplier images, but expanding a 12MP phone photo is
+        # expensive and usually adds no decoding information. Cap working resolution.
         longest = max(rgb.size)
         if longest < 1600:
             scale = min(2.0, 1600 / max(1, longest))
@@ -89,14 +89,6 @@ class BarcodeReader:
                     )
                 except Exception as exc:
                     warnings.append(f"barcode_pass_{index}_failed:{type(exc).__name__}")
-                finally:
-                    # The original source is managed by Image.open; generated variants
-                    # can be released as soon as a pass is complete.
-                    if variant is not source:
-                        try:
-                            variant.close()
-                        except Exception:
-                            pass
 
         barcode = choose_barcode_consensus(decoded_values)
         checksum_valid = None
