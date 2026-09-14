@@ -115,3 +115,11 @@ def test_ocr_name_without_required_size_does_not_overrule_valid_barcode():
     lemon = product("2", "Green Tea Lemon 500ml")
 
     assert ocr_conflict_reason(lines, lemon, [apple, lemon]) is None
+
+
+def test_ocr_unknown_confidence_never_creates_hard_barcode_conflict():
+    lines = [OCRLine("GREEN TEA APPLE", 0.0), OCRLine("500 ML", 0.0)]
+    apple = product("1", "Green Tea Apple 500ml")
+    lemon = product("2", "Green Tea Lemon 500ml")
+
+    assert ocr_conflict_reason(lines, lemon, [apple, lemon]) is None
