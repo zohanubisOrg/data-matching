@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import logging
 from pathlib import Path
+import re
 import shutil
 
 from openpyxl import Workbook
@@ -14,6 +15,7 @@ from ..models import MatchResult
 logger = logging.getLogger("product_mapper")
 
 HEADER_FILL_BLUE = "1F4E78"
+_SAFE_FILENAME_BARCODE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _format_worksheet(ws, headers: list[str], rows: list[list[object]]) -> None:
@@ -78,6 +80,36 @@ def _export_matched_jpeg(source: Path, targets: list[Path], copy_failures: set[s
         return False
 
 
+def _append_error_rows(
+    result: MatchResult,
+    deliverable_rows: list[dict[str, str]],
+    mapping_rows: list[dict[str, str]],
+) -> None:
+    deliverable_rows.append({
+        "Barcode": "",
+        "SKU": "",
+        "Original Name": result.image.raw_name,
+        "Final Name": result.image.normalized_name,
+        "Original Image": result.image.filename,
+        "Final Image": "",
+        "Status": "ERROR",
+    })
+    mapping_rows.append({
+        "barcode": "",
+        "pos_sku": "",
+        "product_id": "",
+        "source_name": result.image.raw_name,
+        "normalized_name": result.image.normalized_name,
+        "supplier": result.image.source or "",
+        "supplier_sku": result.image.source_product_id or "",
+        "original_image": result.image.filename,
+        "final_image": "",
+        "match_method": result.match_method or "error",
+        "match_score": "0.0000",
+        "status": "INVALID",
+    })
+
+
 def export_standard_deliverables(
     results: list[MatchResult],
     output_dir: Path,
@@ -108,7 +140,6 @@ def export_standard_deliverables(
     deliverable_rows: list[dict[str, str]] = []
     mapping_rows: list[dict[str, str]] = []
 
-    # Ensure one physical image is never silently claimed by two different barcodes.
     for result in results:
         if result.status == "AUTO_MATCHED" and result.candidate and result.candidate.product.barcode:
             barcode = result.candidate.product.barcode.strip()
@@ -148,16 +179,28 @@ def export_standard_deliverables(
             original_name = result.candidate.product.product_name.strip()
             final_name = (result.candidate.product.official_name or result.candidate.product.product_name).strip()
 
-            index = barcode_counts.get(barcode, 0) + 1
-            barcode_counts[barcode] = index
-            final_image_name = f"{barcode}.jpg" if index == 1 else f"{barcode}_{index}.jpg"
+            if not _SAFE_FILENAME_BARCODE.fullmatch(barcode):
+                result.status = "ERROR"
+                result.reason = "matched POS barcode is unsafe as canonical image filename"
+                _append_error_rows(result, deliverable_rows, mapping_rows)
+                error_count += 1
+                continue
 
-            _export_matched_jpeg(
+            index = barcode_counts.get(barcode, 0) + 1
+            final_image_name = f"{barcode}.jpg" if index == 1 else f"{barcode}_{index}.jpg"
+            exported = _export_matched_jpeg(
                 source_path,
                 [matched_dir / final_image_name, images_dir / final_image_name],
                 copy_failures,
             )
+            if not exported:
+                result.status = "ERROR"
+                result.reason = "canonical matched image export failed"
+                _append_error_rows(result, deliverable_rows, mapping_rows)
+                error_count += 1
+                continue
 
+            barcode_counts[barcode] = index
             deliverable_rows.append({
                 "Barcode": barcode,
                 "SKU": sku,
@@ -259,29 +302,7 @@ def export_standard_deliverables(
 
         else:
             _copy_image(source_path, [unmatched_dir / original_image_name], copy_failures)
-            deliverable_rows.append({
-                "Barcode": "",
-                "SKU": "",
-                "Original Name": result.image.raw_name,
-                "Final Name": result.image.normalized_name,
-                "Original Image": original_image_name,
-                "Final Image": "",
-                "Status": "ERROR",
-            })
-            mapping_rows.append({
-                "barcode": "",
-                "pos_sku": "",
-                "product_id": "",
-                "source_name": result.image.raw_name,
-                "normalized_name": result.image.normalized_name,
-                "supplier": supplier_name,
-                "supplier_sku": supplier_sku,
-                "original_image": original_image_name,
-                "final_image": "",
-                "match_method": "error",
-                "match_score": "0.0000",
-                "status": "INVALID",
-            })
+            _append_error_rows(result, deliverable_rows, mapping_rows)
             error_count += 1
 
     headers_7 = ["Barcode", "SKU", "Original Name", "Final Name", "Original Image", "Final Image", "Status"]
@@ -324,10 +345,10 @@ def export_standard_deliverables(
 
     valid_images = len(results)
     total_input_images = valid_images + invalid_input_count
-    matched_pos_barcodes = {
-        row["Barcode"]
-        for row in deliverable_rows
-        if row["Status"] == "MATCHED" and row["Barcode"]
+    matched_pos_identities = {
+        (row["product_id"], row["pos_sku"], row["barcode"])
+        for row in mapping_rows
+        if row["status"] == "MATCHED"
     }
     percent = lambda count: (count / total_input_images * 100.0) if total_input_images else 0.0
     reconciled = matched_count + review_count + unmatched_count + error_count + invalid_input_count
@@ -343,19 +364,19 @@ FINAL DATA MATCHING & RECONCILIATION REPORT
 --------------------------------------------------------------------------------
 Total Input Images Discovered:      {total_input_images}
 Valid Images Processed:             {valid_images}
-Invalid input files:               {invalid_input_count}
+Invalid input files:                {invalid_input_count}
   - MATCHED (in /matched-images/):  {matched_count} ({percent(matched_count):.1f}%)
   - REVIEW (in /unmatched-images/): {review_count} ({percent(review_count):.1f}%)
   - UNMATCHED:                      {unmatched_count} ({percent(unmatched_count):.1f}%)
-  - PROCESSING ERROR:               {error_count} ({percent(error_count):.1f}%)
+  - PROCESSING/EXPORT ERROR:        {error_count} ({percent(error_count):.1f}%)
   ------------------------------------------------------------------------------
   Reconciled Check:                 {reconciled} / {total_input_images} [{reconciliation_state}]
 
 2. POS PRODUCTS ACCOUNTING
 --------------------------------------------------------------------------------
 Total POS Products in System:       {total_pos_count}
-  - Unique matched POS barcodes:    {len(matched_pos_barcodes)}
-  - POS rows without matched image: {total_pos_count - len(matched_pos_barcodes) if total_pos_count else 'N/A'}
+  - Unique matched POS identities:  {len(matched_pos_identities)}
+  - POS rows without matched image: {total_pos_count - len(matched_pos_identities) if total_pos_count else 'N/A'}
   ------------------------------------------------------------------------------
   Barcode & SKU handling:           Preserved from POS records; never synthesized.
 
@@ -368,8 +389,8 @@ Gold-dataset accuracy:              NOT MEASURED
 Final Matched Accuracy:             NOT MEASURED (requires gold dataset or human verification)
 
 The strict matcher is designed to maximize precision by sending uncertain evidence to
-REVIEW/UNMATCHED. Invalid inputs remain accounted for through Data Quality reporting.
-This report intentionally does not infer 100% accuracy from matching rules alone.
+REVIEW/UNMATCHED. A row is only delivered as MATCHED when its canonical image export
+succeeds. Invalid inputs remain accounted for through Data Quality reporting.
 ================================================================================
 """
     (output_dir / "reconciliation_report.txt").write_text(recon_report, encoding="utf-8")
@@ -385,5 +406,5 @@ This report intentionally does not infer 100% accuracy from matching rules alone
         "error_count": error_count,
         "conflict_count": conflict_count,
         "copy_failure_count": len(copy_failures),
-        "matched_pos_count": len(matched_pos_barcodes),
+        "matched_pos_count": len(matched_pos_identities),
     }
