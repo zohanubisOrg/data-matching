@@ -14,6 +14,21 @@ def test_empty_export_is_reconciled_without_division_by_zero(tmp_path):
     assert "Final Matched Accuracy:             100%" not in report
 
 
+def test_invalid_input_files_are_included_in_accounting(tmp_path):
+    summary = export_standard_deliverables(
+        [],
+        tmp_path,
+        total_pos_count=0,
+        invalid_input_count=2,
+    )
+
+    assert summary["invalid_input_count"] == 2
+    assert summary["total_input_images"] == 2
+    report = (tmp_path / "reconciliation_report.txt").read_text(encoding="utf-8")
+    assert "Invalid input files:               2" in report
+    assert "Reconciled Check:                 2 / 2 [PASS]" in report
+
+
 def test_reconciliation_report_does_not_claim_copy_or_accuracy_pass_without_measurement(tmp_path):
     export_standard_deliverables([], tmp_path, total_pos_count=10)
 
