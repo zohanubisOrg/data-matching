@@ -19,8 +19,6 @@ def run_command(
     pos: Path = typer.Option(DEFAULT_POS, "--pos", exists=True, dir_okay=False),
     imports: Path = typer.Option(DEFAULT_IMPORTS, "--imports", exists=True, dir_okay=False),
     output: Path = typer.Option(DEFAULT_OUTPUT, "--output"),
-    auto_threshold: float = typer.Option(.80, "--auto-threshold", min=0, max=1),
-    review_threshold: float = typer.Option(.60, "--review-threshold", min=0, max=1),
     top_k: int = typer.Option(3, "--top-k", min=1, max=20),
     verbose: bool = typer.Option(False, "--verbose"),
     ocr_provider: str = typer.Option(
@@ -29,32 +27,37 @@ def run_command(
         help="OCR evidence provider for strict image matching: none or paddle.",
     ),
 ):
+    """Run strict barcode-first image reconciliation; fuzzy thresholds do not apply."""
     typer.echo(json.dumps(run(
         _paths(images),
         pos,
         imports,
         output,
-        auto_threshold,
-        review_threshold,
-        top_k,
-        verbose,
+        top_k=top_k,
+        verbose=verbose,
         ocr_provider=ocr_provider,
     ), indent=2))
 
 
-@app.command("match-names")
-def match_names_command(
+@app.command("match-names-legacy-fuzzy")
+def match_names_legacy_fuzzy_command(
     pos: Path = typer.Option(DEFAULT_POS, "--pos", exists=True, dir_okay=False),
     imports: Path = typer.Option(DEFAULT_IMPORTS, "--imports", exists=True, dir_okay=False),
-    output: Path = typer.Option(DEFAULT_OUTPUT, "--output"),
+    output: Path = typer.Option(DEFAULT_OUTPUT / "legacy-fuzzy", "--output"),
     auto_threshold: float = typer.Option(.88, "--auto-threshold", min=0, max=1),
     review_threshold: float = typer.Option(.72, "--review-threshold", min=0, max=1),
     ambiguity_margin: float = typer.Option(.04, "--ambiguity-margin", min=0, max=1),
 ):
-    """Match import workbook product names directly against POS names; images are ignored."""
-    from .ingestion.pos_loader import load_pos
-    from .ingestion.supplier_loader import load_imports
-    from .matching.name_only import match_import_names, summarize_name_matches, write_name_match_outputs
+    """Legacy benchmark only; never used by the production image pipeline."""
+    try:
+        from .ingestion.pos_loader import load_pos
+        from .ingestion.supplier_loader import load_imports
+        from .matching.name_only import match_import_names, summarize_name_matches, write_name_match_outputs
+    except ImportError as exc:
+        raise typer.BadParameter(
+            "Legacy fuzzy benchmark dependencies are not installed. "
+            "Install with: python -m pip install -e '.[legacy-fuzzy]'"
+        ) from exc
 
     products, _, _ = load_pos(pos)
     supplier_rows, _ = load_imports(imports)
@@ -100,7 +103,6 @@ def profile(
     imports: Path = typer.Option(DEFAULT_IMPORTS, "--imports", exists=True, dir_okay=False),
     output: Path = typer.Option(DEFAULT_OUTPUT, "--output"),
 ):
-    # Profile is deliberately implemented through the same safe ingestion path; it never matches.
     from .ingestion.image_loader import load_images
     from .ingestion.pos_loader import load_pos
     from .ingestion.supplier_loader import load_imports
@@ -122,7 +124,7 @@ def apply_review_command(
     review_file: Path = typer.Option(DEFAULT_OUTPUT / "customer_review.xlsx", "--review-file", exists=True, dir_okay=False),
     kb_file: Path = typer.Option(DEFAULT_OUTPUT / "knowledge_base.json", "--kb-file"),
 ):
-    """Imports human review decisions from customer_review.xlsx into knowledge_base.json for Level 1 deterministic matching."""
+    """Imports human review decisions from customer_review.xlsx into knowledge_base.json."""
     from .matching.knowledge_base import import_review_decisions
 
     count = import_review_decisions(review_file, kb_file)
