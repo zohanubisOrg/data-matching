@@ -137,8 +137,6 @@ def _normalized_measurement(amount: float, unit: str) -> tuple[str, float]:
 
 def _extract_item_size(value: object) -> tuple[str, float] | None:
     text = _measurement_text(value)
-    # Compact logistics forms such as 24x500ml hide the item size from _SIZE_RE
-    # because the preceding 'x' is a word character. Parse the pack regex first.
     pack = _PACK_SIZE_RE.search(text)
     if pack:
         amount = float(pack.group(1).replace(",", "."))
@@ -157,9 +155,11 @@ def _extract_case_pack(value: object) -> str:
 
 
 def _description_text(value: object) -> str:
+    """Remove logistics expressions without discarding identity text around them."""
     text = _measurement_text(value)
-    matches = [match for match in (_PACK_SIZE_RE.search(text), _PACK_PCS_RE.search(text)) if match]
-    return text[:min(match.start() for match in matches)] if matches else text
+    text = _PACK_SIZE_RE.sub(" ", text)
+    text = _PACK_PCS_RE.sub(" ", text)
+    return " ".join(text.split())
 
 
 def _core_text(value: object) -> str:
