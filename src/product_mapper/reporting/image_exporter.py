@@ -82,8 +82,9 @@ def export_standard_deliverables(
     results: list[MatchResult],
     output_dir: Path,
     total_pos_count: int = 0,
+    invalid_input_count: int = 0,
 ) -> dict:
-    """Export client deliverables without making unmeasured accuracy claims."""
+    """Export client deliverables and account for both valid and invalid image inputs."""
     matched_dir = output_dir / "matched-images"
     images_dir = output_dir / "images"
     unmatched_dir = output_dir / "unmatched-images"
@@ -98,6 +99,7 @@ def export_standard_deliverables(
             except Exception as exc:
                 logger.warning("Could not remove stale output file %s: %s", old_file, exc)
 
+    invalid_input_count = max(0, int(invalid_input_count))
     barcode_counts: dict[str, int] = {}
     image_to_barcode: dict[Path, str] = {}
     conflict_count = 0
@@ -320,15 +322,16 @@ def export_standard_deliverables(
         writer.writeheader()
         writer.writerows(mapping_rows)
 
-    total_images = len(results)
+    valid_images = len(results)
+    total_input_images = valid_images + invalid_input_count
     matched_pos_barcodes = {
         row["Barcode"]
         for row in deliverable_rows
         if row["Status"] == "MATCHED" and row["Barcode"]
     }
-    percent = lambda count: (count / total_images * 100.0) if total_images else 0.0
-    reconciled = matched_count + review_count + unmatched_count + error_count
-    reconciliation_state = "PASS" if reconciled == total_images else "FAIL"
+    percent = lambda count: (count / total_input_images * 100.0) if total_input_images else 0.0
+    reconciled = matched_count + review_count + unmatched_count + error_count + invalid_input_count
+    reconciliation_state = "PASS" if reconciled == total_input_images else "FAIL"
     conflict_state = "PASS" if conflict_count == 0 else "REVIEW REQUIRED"
     copy_state = "PASS" if not copy_failures else "FAIL"
 
@@ -338,13 +341,15 @@ FINAL DATA MATCHING & RECONCILIATION REPORT
 
 1. IMAGES ACCOUNTING
 --------------------------------------------------------------------------------
-Total Input Images Processed:       {total_images}
+Total Input Images Discovered:      {total_input_images}
+Valid Images Processed:             {valid_images}
+Invalid input files:               {invalid_input_count}
   - MATCHED (in /matched-images/):  {matched_count} ({percent(matched_count):.1f}%)
   - REVIEW (in /unmatched-images/): {review_count} ({percent(review_count):.1f}%)
   - UNMATCHED:                      {unmatched_count} ({percent(unmatched_count):.1f}%)
-  - ERROR / INVALID:                {error_count} ({percent(error_count):.1f}%)
+  - PROCESSING ERROR:               {error_count} ({percent(error_count):.1f}%)
   ------------------------------------------------------------------------------
-  Reconciled Check:                 {reconciled} / {total_images} [{reconciliation_state}]
+  Reconciled Check:                 {reconciled} / {total_input_images} [{reconciliation_state}]
 
 2. POS PRODUCTS ACCOUNTING
 --------------------------------------------------------------------------------
@@ -363,15 +368,17 @@ Gold-dataset accuracy:              NOT MEASURED
 Final Matched Accuracy:             NOT MEASURED (requires gold dataset or human verification)
 
 The strict matcher is designed to maximize precision by sending uncertain evidence to
-REVIEW/UNMATCHED. This report intentionally does not infer 100% accuracy from matching
-rules alone.
+REVIEW/UNMATCHED. Invalid inputs remain accounted for through Data Quality reporting.
+This report intentionally does not infer 100% accuracy from matching rules alone.
 ================================================================================
 """
     (output_dir / "reconciliation_report.txt").write_text(recon_report, encoding="utf-8")
 
     logger.info("Deliverables exported:\n%s", recon_report)
     return {
-        "total_images": total_images,
+        "total_images": valid_images,
+        "total_input_images": total_input_images,
+        "invalid_input_count": invalid_input_count,
         "matched_count": matched_count,
         "review_count": review_count,
         "unmatched_count": unmatched_count,
