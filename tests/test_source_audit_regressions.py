@@ -131,6 +131,33 @@ def test_barcode_index_preserves_duplicate_pos_identity_for_review():
     assert [item.product_id for item in index[VALID_EAN13]] == ["1", "2"]
 
 
+def test_duplicate_pos_rows_with_same_product_id_are_not_collapsed(tmp_path):
+    path = tmp_path / "barcode.jpg"
+    Image.new("RGB", (16, 16), "white").save(path)
+    first = product("1")
+    second = first.model_copy()
+
+    class Reader:
+        def analyze(self, _: Path) -> ImageAttributes:
+            return ImageAttributes(
+                barcode=VALID_EAN13,
+                barcode_candidates=[VALID_EAN13],
+                barcode_checksum_valid=True,
+            )
+
+    result = resolve_capture_evidence(
+        [image(path)],
+        [first, second],
+        Reader(),
+        NoOpVisionProvider(),
+        barcode_index=build_barcode_index([first, second]),
+    )[0]
+
+    assert result.status == "NEED_REVIEW"
+    assert result.reason == "DUPLICATE_OR_EQUIVALENT_POS_BARCODE"
+    assert len(result.top_candidates) == 2
+
+
 def test_checksum_valid_gtin13_matches_equivalent_zero_padded_gtin14(tmp_path):
     path = tmp_path / "barcode.jpg"
     Image.new("RGB", (16, 16), "white").save(path)
