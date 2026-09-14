@@ -60,6 +60,38 @@ def test_customer_review_persists_product_id_sku_and_barcode(tmp_path):
     assert data["product.jpg"]["barcode"] == "4006381333931"
 
 
+def test_customer_review_has_one_decision_row_per_front_back_capture(tmp_path):
+    candidate_product = product("1", "SKU-A", "4006381333931", "Sesame Oil")
+    candidate = MatchCandidate(product=candidate_product, score=1.0)
+    front = ProductImage(
+        path=tmp_path / "000123_front.jpg",
+        filename="000123_front.jpg",
+        capture_id="000123",
+        image_side="front",
+    )
+    back = ProductImage(
+        path=tmp_path / "000123_back.jpg",
+        filename="000123_back.jpg",
+        capture_id="000123",
+        image_side="back",
+    )
+    results = [
+        MatchResult(image=front, status="NEED_REVIEW", top_candidates=[candidate], reason="review"),
+        MatchResult(image=back, status="NEED_REVIEW", top_candidates=[candidate], reason="review"),
+    ]
+
+    write_reports(
+        results,
+        [],
+        {"pos": {"rows": 1}, "imports": {"rows": 0}, "images": {"directories": {}}},
+        tmp_path,
+    )
+
+    workbook = load_workbook(tmp_path / "customer_review.xlsx", read_only=True)
+    sheet = workbook["Review"]
+    assert sheet.max_row == 2  # header + one physical-product decision
+
+
 def test_html_review_json_can_merge_into_knowledge_base(tmp_path):
     review_json = tmp_path / "reviewed_knowledge.json"
     review_json.write_text(json.dumps({
