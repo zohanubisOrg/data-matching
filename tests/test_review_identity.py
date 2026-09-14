@@ -2,7 +2,11 @@ import json
 
 from openpyxl import load_workbook
 
-from product_mapper.matching.knowledge_base import import_review_decisions, resolve_approved_mapping
+from product_mapper.matching.knowledge_base import (
+    import_review_decisions,
+    import_review_json_decisions,
+    resolve_approved_mapping,
+)
 from product_mapper.models import MatchCandidate, MatchResult, POSProduct, ProductImage
 from product_mapper.reporting.excel_report import write_reports
 
@@ -54,6 +58,25 @@ def test_customer_review_persists_product_id_sku_and_barcode(tmp_path):
     assert data["product.jpg"]["product_id"] == "2"
     assert data["product.jpg"]["sku"] == "SKU-B"
     assert data["product.jpg"]["barcode"] == "4006381333931"
+
+
+def test_html_review_json_can_merge_into_knowledge_base(tmp_path):
+    review_json = tmp_path / "reviewed_knowledge.json"
+    review_json.write_text(json.dumps({
+        "product.jpg": {
+            "selection": "1",
+            "product_id": "2",
+            "sku": "SKU-B",
+            "barcode": "4006381333931",
+            "source": "review_report_html",
+        }
+    }), encoding="utf-8")
+    kb_path = tmp_path / "knowledge_base.json"
+
+    assert import_review_json_decisions(review_json, kb_path) == 1
+    saved = json.loads(kb_path.read_text(encoding="utf-8"))
+    assert saved["product.jpg"]["product_id"] == "2"
+    assert saved["product.jpg"]["source"] == "review_report_html"
 
 
 def test_human_approved_tuple_resolves_one_row_even_when_barcode_is_duplicated():
