@@ -131,12 +131,30 @@ def _analyze_ocr(provider: VisionProvider, image: ProductImage) -> ImageAttribut
 
 
 def _analyze_capture_ocr(provider: VisionProvider, images: list[ProductImage]) -> ImageAttributes:
+    """Read front-label OCR first, falling back to one alternate image only if empty.
+
+    This keeps ingredient/nutrition text on the back from contaminating a successful
+    front-label identity while still recovering OCR evidence when the front is unreadable.
+    """
     lines = []
     warnings: list[str] = []
-    for image in preferred_ocr_images(images):
+    primary = preferred_ocr_images(images)
+
+    for image in primary:
         evidence = _analyze_ocr(provider, image)
         lines.extend(evidence.ocr_lines)
         warnings.extend(f"{image.filename}:{warning}" for warning in evidence.warnings)
+
+    if lines:
+        return ImageAttributes(ocr_lines=lines, warnings=warnings)
+
+    primary_paths = {image.path for image in primary}
+    fallback = next((image for image in images if image.path not in primary_paths), None)
+    if fallback is not None:
+        evidence = _analyze_ocr(provider, fallback)
+        lines.extend(evidence.ocr_lines)
+        warnings.extend(f"{fallback.filename}:{warning}" for warning in evidence.warnings)
+
     return ImageAttributes(ocr_lines=lines, warnings=warnings)
 
 
@@ -197,9 +215,7 @@ def _analyze_capture_barcodes(
             valid_canonical.discard(None)
             # One valid barcode from the intentional back-side capture is enough;
             # front OCR later provides an independent product-label cross-check.
-            if len(valid_canonical) == 1:
-                break
-            if len(valid_canonical) > 1:
+            if len(valid_canonical) >= 1:
                 break
 
     barcode = _select_capture_barcode(values)
@@ -447,7 +463,7 @@ def _human_group_result(
     entries = [
         kb[image.filename]
         for image in images
-        if filename_counts[image.filename] == 1 and image.filename in kb
+        if filename_counts[image.filename.casefold()] == 1 and image.filename in kb
     ]
     if not entries:
         return None
@@ -514,8 +530,8 @@ def run(
 ) -> dict:
     """Run the strict production image reconciliation pipeline.
 
-    auto_threshold/review_threshold are retained for API compatibility but are not used
-    by the strict deterministic production path.
+    auto_threshold/review_threshold remain only for Python API compatibility and are
+    ignored by the strict deterministic production path.
     """
     started = time.perf_counter()
     images = images or DEFAULT_IMAGES
@@ -546,7 +562,7 @@ def run(
     barcode_index = build_barcode_index(products)
     evidence_index = ProductEvidenceIndex(products)
     capture_groups = group_product_images(parsed_images)
-    filename_counts = Counter(image.filename for image in parsed_images)
+    filename_counts = Counter(image.filename.casefold() for image in parsed_images)
     logger.info(
         "barcode reader available=%s captures=%s images=%s",
         barcode_reader.available,
