@@ -17,14 +17,15 @@ class IndexedProductIdentity:
 class ProductEvidenceIndex:
     """Run-scoped deterministic index shared by barcode/OCR matching.
 
-    Product names are canonicalized once per pipeline run instead of once per image.
-    The index contains no similarity scores or fuzzy retrieval structures.
+    Product names are canonicalized and grouped once per pipeline run instead of once
+    per image. The index contains no similarity scores or fuzzy retrieval structures.
     """
 
     def __init__(self, products: list[POSProduct]):
         self.products = products
         self.by_id: dict[str, POSProduct] = {product.product_id: product for product in products}
         self.identities: list[IndexedProductIdentity] = []
+        self.by_product: dict[str, list[IndexedProductIdentity]] = {}
         self.by_full: dict[str, list[IndexedProductIdentity]] = {}
         self.by_core: dict[str, list[IndexedProductIdentity]] = {}
 
@@ -39,5 +40,6 @@ class ProductEvidenceIndex:
                 identity = _identity(value)
                 item = IndexedProductIdentity(product, field, value, identity)
                 self.identities.append(item)
+                self.by_product.setdefault(product.product_id, []).append(item)
                 self.by_full.setdefault(identity["full"], []).append(item)
                 self.by_core.setdefault(identity["core"], []).append(item)
