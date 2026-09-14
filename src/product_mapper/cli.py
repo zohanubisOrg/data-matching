@@ -39,7 +39,7 @@ def run_command(
     ), indent=2))
 
 
-@app.command("match-names-legacy-fuzzy")
+@app.command("match-names")
 def match_names_legacy_fuzzy_command(
     pos: Path = typer.Option(DEFAULT_POS, "--pos", exists=True, dir_okay=False),
     imports: Path = typer.Option(DEFAULT_IMPORTS, "--imports", exists=True, dir_okay=False),
@@ -48,7 +48,7 @@ def match_names_legacy_fuzzy_command(
     review_threshold: float = typer.Option(.72, "--review-threshold", min=0, max=1),
     ambiguity_margin: float = typer.Option(.04, "--ambiguity-margin", min=0, max=1),
 ):
-    """Legacy benchmark only; never used by the production image pipeline."""
+    """Legacy fuzzy benchmark only; never used by the production image pipeline."""
     try:
         from .ingestion.pos_loader import load_pos
         from .ingestion.supplier_loader import load_imports
