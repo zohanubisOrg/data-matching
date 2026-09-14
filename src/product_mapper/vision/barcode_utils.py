@@ -36,6 +36,31 @@ def validate_gtin(value: str) -> bool:
     return calculated_check == expected_check
 
 
+def canonical_gtin14(value: object) -> str | None:
+    """Return the standards-equivalent 14-digit GTIN key for a valid GTIN.
+
+    Zero-padding a valid GTIN-8/12/13 to GTIN-14 is an identity-preserving standards
+    representation, not fuzzy matching. Invalid/non-GTIN values deliberately have no
+    canonical key.
+    """
+    normalized = normalize_barcode(value)
+    if not validate_gtin(normalized):
+        return None
+    return normalized.zfill(14)
+
+
+def barcode_lookup_keys(value: object) -> tuple[str, ...]:
+    """Return exact plus standards-equivalent deterministic lookup keys."""
+    normalized = normalize_barcode(value)
+    if not normalized:
+        return ()
+    keys = [normalized]
+    canonical = canonical_gtin14(normalized)
+    if canonical:
+        keys.append(f"gtin14:{canonical}")
+    return tuple(keys)
+
+
 def choose_barcode_consensus(values: Iterable[object]) -> str | None:
     """Return the unique most frequently decoded normalized value, otherwise None."""
     normalized = [normalize_barcode(value) for value in values]
