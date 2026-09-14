@@ -6,7 +6,8 @@ from .attributes import parse_packaging
 from .text_normalizer import normalize_text
 
 _ID = re.compile(r"^\d{3,}[A-Za-z]{0,3}$")
-_CAPTURE_SIDE = re.compile(r"^(?P<capture>.+?)[_-](?P<side>front|back)$", re.I)
+_CAPTURE_SUFFIX = re.compile(r"^(?P<capture>.+?)[_-](?P<side>front|back)$", re.I)
+_CAPTURE_PREFIX = re.compile(r"^(?P<side>front|back)[_-](?P<capture>.+)$", re.I)
 
 
 def _clean_product_name(raw: str) -> str:
@@ -16,53 +17,62 @@ def _clean_product_name(raw: str) -> str:
     return "_".join(tokens)
 
 
-def _capture_filename(path: Path) -> ProductImage | None:
-    match = _CAPTURE_SIDE.fullmatch(path.stem)
+def _capture_parts(stem: str) -> tuple[str | None, str | None]:
+    match = _CAPTURE_SUFFIX.fullmatch(stem) or _CAPTURE_PREFIX.fullmatch(stem)
     if not match:
-        return None
-    capture_id = match.group("capture").strip()
+        return None, None
+    capture_id = match.group("capture").strip("_-")
     side = match.group("side").casefold()
-    if not capture_id:
+    return (capture_id or None), side
+
+
+def _legacy_parts(stem: str) -> tuple[str, str, str] | None:
+    parts = stem.split("_")
+    indexes = [i for i, part in enumerate(parts) if 0 < i < len(parts) - 1 and _ID.fullmatch(part)]
+    if not indexes:
         return None
-    return ProductImage(
-        path=path,
-        filename=path.name,
-        source=path.parent.name.casefold() or "capture",
-        source_product_id=capture_id,
-        raw_name="",
-        normalized_name="",
-        packaging=parse_packaging(""),
-        capture_id=capture_id,
-        image_side=side,
-    )
+    index = indexes[0]
+    raw = "_".join(parts[index + 1 :])
+    return "_".join(parts[:index]).casefold(), parts[index], raw
 
 
 def parse_filename(path: Path) -> ProductImage:
-    """Parse legacy supplier names while keeping every valid image account-able.
+    """Parse legacy supplier names and modern front/back camera captures safely.
 
-    Legacy names still expose supplier/source/name evidence. New camera captures such
-    as ``000123_front.jpg`` / ``000123_back.jpg`` share a capture id but deliberately
-    do not invent a product name. Any other valid image falls back to its stem instead
-    of being discarded solely because the filename does not match a supplier pattern.
+    A capture suffix/prefix is metadata, not product-name text. If the capture stem is
+    also a legacy supplier filename, its supplier id and product-name evidence are
+    preserved. Generic valid images are never discarded merely for naming format.
     """
-    capture = _capture_filename(path)
-    if capture is not None:
-        return capture
+    capture_id, image_side = _capture_parts(path.stem)
+    evidence_stem = capture_id if capture_id is not None else path.stem
+    legacy = _legacy_parts(evidence_stem)
 
-    parts = path.stem.split("_")
-    indexes = [i for i, part in enumerate(parts) if 0 < i < len(parts) - 1 and _ID.fullmatch(part)]
-    if indexes:
-        index = indexes[0]
-        raw = "_".join(parts[index + 1 :])
+    if legacy is not None:
+        source, source_product_id, raw = legacy
         cleaned_raw = _clean_product_name(raw)
         return ProductImage(
             path=path,
             filename=path.name,
-            source="_".join(parts[:index]).casefold(),
-            source_product_id=parts[index],
+            source=source,
+            source_product_id=source_product_id,
             raw_name=cleaned_raw,
             normalized_name=normalize_text(cleaned_raw),
             packaging=parse_packaging(raw),
+            capture_id=capture_id,
+            image_side=image_side,
+        )
+
+    if capture_id is not None:
+        return ProductImage(
+            path=path,
+            filename=path.name,
+            source=path.parent.name.casefold() or "capture",
+            source_product_id=capture_id,
+            raw_name="",
+            normalized_name="",
+            packaging=parse_packaging(""),
+            capture_id=capture_id,
+            image_side=image_side,
         )
 
     raw = path.stem.strip()
