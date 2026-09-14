@@ -7,6 +7,7 @@ import shutil
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from PIL import Image, ImageOps
 
 from ..models import MatchResult
 
@@ -35,13 +36,46 @@ def _format_worksheet(ws, headers: list[str], rows: list[list[object]]) -> None:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 
 
-def _copy_image(source: Path, targets: list[Path], copy_failures: set[str]) -> None:
+def _copy_image(source: Path, targets: list[Path], copy_failures: set[str]) -> bool:
     try:
         for target in targets:
             shutil.copy2(source, target)
+        return True
     except Exception as exc:
         copy_failures.add(str(source))
         logger.error("Failed to copy image %s: %s", source, exc)
+        return False
+
+
+def _to_rgb_for_jpeg(image: Image.Image) -> Image.Image:
+    image = ImageOps.exif_transpose(image)
+    if "A" in image.getbands():
+        rgba = image.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        background.alpha_composite(rgba)
+        return background.convert("RGB")
+    return image.convert("RGB")
+
+
+def _export_matched_jpeg(source: Path, targets: list[Path], copy_failures: set[str]) -> bool:
+    """Write a canonical JPEG for website/import delivery regardless of source format."""
+    try:
+        if source.suffix.casefold() in {".jpg", ".jpeg"}:
+            for target in targets:
+                shutil.copy2(source, target)
+            return True
+
+        with Image.open(source) as image:
+            rgb = _to_rgb_for_jpeg(image)
+            first = targets[0]
+            rgb.save(first, format="JPEG", quality=95, subsampling=0, optimize=True)
+            for target in targets[1:]:
+                shutil.copy2(first, target)
+        return True
+    except Exception as exc:
+        copy_failures.add(str(source))
+        logger.error("Failed to export canonical JPEG %s: %s", source, exc)
+        return False
 
 
 def export_standard_deliverables(
@@ -112,12 +146,11 @@ def export_standard_deliverables(
             original_name = result.candidate.product.product_name.strip()
             final_name = (result.candidate.product.official_name or result.candidate.product.product_name).strip()
 
-            suffix = source_path.suffix.lower() or ".jpg"
             index = barcode_counts.get(barcode, 0) + 1
             barcode_counts[barcode] = index
-            final_image_name = f"{barcode}{suffix}" if index == 1 else f"{barcode}_{index}{suffix}"
+            final_image_name = f"{barcode}.jpg" if index == 1 else f"{barcode}_{index}.jpg"
 
-            _copy_image(
+            _export_matched_jpeg(
                 source_path,
                 [matched_dir / final_image_name, images_dir / final_image_name],
                 copy_failures,
@@ -324,8 +357,8 @@ Total POS Products in System:       {total_pos_count}
 3. IMAGE & QUALITY SAFEGUARDS
 --------------------------------------------------------------------------------
 Duplicate image conflicts:          {conflict_count} [{conflict_state}]
-Output copy failures:               {len(copy_failures)} [{copy_state}]
-Output naming policy:               <barcode>.<ext> or <barcode>_N.<ext>
+Output copy/conversion failures:    {len(copy_failures)} [{copy_state}]
+Output naming policy:               <barcode>.jpg or <barcode>_N.jpg
 Gold-dataset accuracy:              NOT MEASURED
 Final Matched Accuracy:             NOT MEASURED (requires gold dataset or human verification)
 
