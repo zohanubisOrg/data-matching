@@ -47,28 +47,56 @@ class BarcodeReader:
         return image.resize(size, Image.Resampling.LANCZOS)
 
     def _variants(self, image: Image.Image) -> Iterator[Image.Image]:
-        """Yield decoding passes without creating 2x/3x copies of large phone photos."""
-        rgb = image.convert("RGB")
+        """Yield bounded decoding passes suitable for large phone photos.
+
+        Barcode detection does not need repeated 10-15 MP buffers. A bounded base
+        substantially reduces CPU/memory while preserving enough detail for a clear
+        product barcode; small supplier images still receive a controlled upscale.
+        """
+        original = image.convert("RGB")
+        longest = max(original.size)
+        if longest < 1600:
+            scale = min(2.0, 1600 / max(1, longest))
+            size = (max(1, round(original.width * scale)), max(1, round(original.height * scale)))
+            rgb = original.resize(size, Image.Resampling.LANCZOS)
+        else:
+            rgb = self._resize_max(original, 2600)
         gray = ImageOps.autocontrast(ImageOps.grayscale(rgb)).convert("RGB")
 
         yield rgb
         yield gray
 
-        # Upscaling helps small supplier images, but expanding a 12MP phone photo is
-        # expensive and usually adds no decoding information. Cap working resolution.
-        longest = max(rgb.size)
-        if longest < 1600:
-            scale = min(2.0, 1600 / max(1, longest))
-            size = (max(1, round(rgb.width * scale)), max(1, round(rgb.height * scale)))
-            yield rgb.resize(size, Image.Resampling.LANCZOS)
-            yield gray.resize(size, Image.Resampling.LANCZOS)
-        else:
-            yield self._resize_max(gray, 2200)
+        # A second, smaller representation often helps ZXing on noisy labels while
+        # avoiding multiple full-resolution copies.
+        compact_rgb = self._resize_max(rgb, 1800)
+        compact_gray = ImageOps.autocontrast(ImageOps.grayscale(compact_rgb)).convert("RGB")
+        yield compact_rgb
+        yield compact_gray
 
         rotation_base = self._resize_max(rgb, 2200)
         yield rotation_base.rotate(90, expand=True)
         yield rotation_base.rotate(180, expand=True)
         yield rotation_base.rotate(270, expand=True)
+
+    @staticmethod
+    def _select_barcode(decoded_values: list[str]) -> str | None:
+        """Prefer checksum-valid GTIN evidence before generic decode frequency.
+
+        Preprocessing passes are correlated observations of the same image. A bad
+        decode repeated on several transforms must not outvote a checksum-valid GTIN.
+        If multiple valid GTIN values remain tied, consensus stays ambiguous.
+        """
+        valid_gtins = [
+            value
+            for value in decoded_values
+            if is_gtin_like(value) and validate_gtin(value)
+        ]
+        valid_consensus = choose_barcode_consensus(valid_gtins)
+        if valid_consensus:
+            return valid_consensus
+        if len(set(valid_gtins)) > 1:
+            return None
+        return choose_barcode_consensus(decoded_values)
 
     def analyze(self, path: Path) -> ImageAttributes:
         if self._decoder is None:
@@ -90,7 +118,7 @@ class BarcodeReader:
                 except Exception as exc:
                     warnings.append(f"barcode_pass_{index}_failed:{type(exc).__name__}")
 
-        barcode = choose_barcode_consensus(decoded_values)
+        barcode = self._select_barcode(decoded_values)
         checksum_valid = None
         if barcode and is_gtin_like(barcode):
             checksum_valid = validate_gtin(barcode)
