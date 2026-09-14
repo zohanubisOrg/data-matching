@@ -6,6 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from ..ingestion.capture_group import group_product_images
 from ..models import DataQualityIssue, MatchResult
 from .serializers import flat_result
 
@@ -60,6 +61,21 @@ def _review_candidate(candidate):
         candidate.product.product_id,
         candidate.product.sku,
     ]
+
+
+def _review_representatives(results: list[MatchResult]) -> list[MatchResult]:
+    """Return one review decision per physical capture, while keeping legacy singles."""
+    review_results = [result for result in results if result.status == "NEED_REVIEW"]
+    if not review_results:
+        return []
+    by_image_id = {id(result.image): result for result in review_results}
+    groups = group_product_images([result.image for result in review_results])
+    representatives: list[MatchResult] = []
+    for group in groups:
+        result = by_image_id.get(id(group[0]))
+        if result is not None:
+            representatives.append(result)
+    return representatives
 
 
 def write_reports(
@@ -190,7 +206,7 @@ def write_reports(
     _sheet(customer_workbook, "Customer Result", customer_headers, customer_rows)
     customer_workbook.save(output / "customer_result.xlsx")
 
-    # Keep the first 11 columns backward-compatible so Customer Selection remains J.
+    # Mapping/audit outputs stay per-image. Human review is one decision per capture.
     review_workbook = Workbook()
     review_workbook.remove(review_workbook.active)
     customer_review_headers = [
@@ -204,9 +220,7 @@ def write_reports(
         "Candidate 3 Product ID", "Candidate 3 SKU",
     ]
     customer_review_rows: list[list[object]] = []
-    for result in results:
-        if result.status != "NEED_REVIEW":
-            continue
+    for result in _review_representatives(results):
         candidates = list(result.top_candidates[:3]) + [None] * 3
         first = _review_candidate(candidates[0])
         second = _review_candidate(candidates[1])
@@ -217,7 +231,7 @@ def write_reports(
             first[0], first[1],
             second[0], second[1],
             third[0], third[1],
-            "",  # No preselected suggestion: deterministic candidates are not probabilities.
+            "",
             "",
             "",
             first[2], first[3],
