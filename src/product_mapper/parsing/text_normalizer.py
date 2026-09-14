@@ -22,6 +22,9 @@ def number(value: str) -> float:
 
 
 GERMAN_VIET_SYNONYMS: dict[str, str] = {
+    # Observed supplier/product-label typo. Keeping the entire phrase protects the
+    # negative qualifier before generic spelling normalization can lose its meaning.
+    "no added suger": "noaddedsugar",
     "reismehl": "rice flour", "bot gao": "rice flour",
     "klebreismehl": "glutinous rice flour", "bot nep": "glutinous rice flour",
     "tapiokastarke": "tapioca flour", "bot nang": "tapioca flour",
@@ -58,5 +61,3 @@ def translate_multilingual(text: str) -> str:
         if src in res:
             res = res.replace(src, f"{src} {tgt}")
     return res
-
-
