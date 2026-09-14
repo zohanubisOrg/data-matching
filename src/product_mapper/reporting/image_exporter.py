@@ -80,6 +80,20 @@ def _export_matched_jpeg(source: Path, targets: list[Path], copy_failures: set[s
         return False
 
 
+def _unique_unresolved_name(filename: str, used: set[str]) -> str:
+    """Return a flat-directory-safe unique name without dropping any input image."""
+    original = Path(filename).name or "image"
+    candidate = original
+    stem = Path(original).stem or "image"
+    suffix = Path(original).suffix
+    counter = 1
+    while candidate.casefold() in used:
+        counter += 1
+        candidate = f"{stem}_{counter}{suffix}"
+    used.add(candidate.casefold())
+    return candidate
+
+
 def _append_error_rows(
     result: MatchResult,
     deliverable_rows: list[dict[str, str]],
@@ -134,6 +148,7 @@ def export_standard_deliverables(
     invalid_input_count = max(0, int(invalid_input_count))
     barcode_counts: dict[str, int] = {}
     image_to_barcode: dict[Path, str] = {}
+    used_unresolved_names: set[str] = set()
     conflict_count = 0
     copy_failures: set[str] = set()
 
@@ -182,6 +197,8 @@ def export_standard_deliverables(
             if not _SAFE_FILENAME_BARCODE.fullmatch(barcode):
                 result.status = "ERROR"
                 result.reason = "matched POS barcode is unsafe as canonical image filename"
+                unresolved_name = _unique_unresolved_name(original_image_name, used_unresolved_names)
+                _copy_image(source_path, [unmatched_dir / unresolved_name], copy_failures)
                 _append_error_rows(result, deliverable_rows, mapping_rows)
                 error_count += 1
                 continue
@@ -196,6 +213,8 @@ def export_standard_deliverables(
             if not exported:
                 result.status = "ERROR"
                 result.reason = "canonical matched image export failed"
+                unresolved_name = _unique_unresolved_name(original_image_name, used_unresolved_names)
+                _copy_image(source_path, [unmatched_dir / unresolved_name], copy_failures)
                 _append_error_rows(result, deliverable_rows, mapping_rows)
                 error_count += 1
                 continue
@@ -236,10 +255,10 @@ def export_standard_deliverables(
                 if result.candidate
                 else result.image.normalized_name
             )
-
+            unresolved_name = _unique_unresolved_name(original_image_name, used_unresolved_names)
             _copy_image(
                 source_path,
-                [unmatched_dir / original_image_name, review_dir / original_image_name],
+                [unmatched_dir / unresolved_name, review_dir / unresolved_name],
                 copy_failures,
             )
 
@@ -269,9 +288,10 @@ def export_standard_deliverables(
             review_count += 1
 
         elif status == "UNMATCHED":
+            unresolved_name = _unique_unresolved_name(original_image_name, used_unresolved_names)
             _copy_image(
                 source_path,
-                [unmatched_dir / original_image_name, unmatched_sub_dir / original_image_name],
+                [unmatched_dir / unresolved_name, unmatched_sub_dir / unresolved_name],
                 copy_failures,
             )
 
@@ -301,7 +321,8 @@ def export_standard_deliverables(
             unmatched_count += 1
 
         else:
-            _copy_image(source_path, [unmatched_dir / original_image_name], copy_failures)
+            unresolved_name = _unique_unresolved_name(original_image_name, used_unresolved_names)
+            _copy_image(source_path, [unmatched_dir / unresolved_name], copy_failures)
             _append_error_rows(result, deliverable_rows, mapping_rows)
             error_count += 1
 
