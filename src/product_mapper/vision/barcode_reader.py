@@ -47,13 +47,10 @@ class BarcodeReader:
         return image.resize(size, Image.Resampling.LANCZOS)
 
     def _variants(self, image: Image.Image) -> Iterator[Image.Image]:
-        """Yield bounded decoding passes suitable for large phone photos.
-
-        Barcode detection does not need repeated 10-15 MP buffers. A bounded base
-        substantially reduces CPU/memory while preserving enough detail for a clear
-        product barcode; small supplier images still receive a controlled upscale.
-        """
-        original = image.convert("RGB")
+        """Yield bounded decoding passes suitable for large phone photos."""
+        # Respect phone-camera EXIF orientation before creating deterministic variants.
+        oriented = ImageOps.exif_transpose(image)
+        original = oriented.convert("RGB")
         longest = max(original.size)
         if longest < 1600:
             scale = min(2.0, 1600 / max(1, longest))
@@ -66,8 +63,6 @@ class BarcodeReader:
         yield rgb
         yield gray
 
-        # A second, smaller representation often helps ZXing on noisy labels while
-        # avoiding multiple full-resolution copies.
         compact_rgb = self._resize_max(rgb, 1800)
         compact_gray = ImageOps.autocontrast(ImageOps.grayscale(compact_rgb)).convert("RGB")
         yield compact_rgb
@@ -80,12 +75,7 @@ class BarcodeReader:
 
     @staticmethod
     def _select_barcode(decoded_values: list[str]) -> str | None:
-        """Prefer checksum-valid GTIN evidence before generic decode frequency.
-
-        Preprocessing passes are correlated observations of the same image. A bad
-        decode repeated on several transforms must not outvote a checksum-valid GTIN.
-        If multiple valid GTIN values remain tied, consensus stays ambiguous.
-        """
+        """Prefer checksum-valid GTIN evidence before generic decode frequency."""
         valid_gtins = [
             value
             for value in decoded_values
@@ -98,7 +88,7 @@ class BarcodeReader:
             return None
         return choose_barcode_consensus(decoded_values)
 
-    def analyze(self, path: Path) -> ImageAttributes:
+    def _analyze(self, path: Path, pass_limit: int | None) -> ImageAttributes:
         if self._decoder is None:
             return ImageAttributes(warnings=["barcode_decoder_unavailable"])
 
@@ -106,7 +96,7 @@ class BarcodeReader:
         warnings: list[str] = []
         with Image.open(path) as source:
             for index, variant in enumerate(self._variants(source), 1):
-                if self._max_passes is not None and index > max(0, self._max_passes):
+                if pass_limit is not None and index > max(0, pass_limit):
                     break
                 try:
                     values = self._decoder(variant)
@@ -129,3 +119,11 @@ class BarcodeReader:
             barcode_checksum_valid=checksum_valid,
             warnings=warnings,
         )
+
+    def analyze(self, path: Path) -> ImageAttributes:
+        return self._analyze(path, self._max_passes)
+
+    def analyze_quick(self, path: Path) -> ImageAttributes:
+        """Use only the first RGB/grayscale passes for secondary-side conflict checks."""
+        limit = 2 if self._max_passes is None else min(max(0, self._max_passes), 2)
+        return self._analyze(path, limit)
