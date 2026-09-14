@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 import logging
 import time
 
 from .config import DEFAULT_IMAGES, DEFAULT_IMPORTS, DEFAULT_OUTPUT, DEFAULT_POS
+from .ingestion.capture_group import group_product_images, preferred_ocr_images
 from .ingestion.image_loader import load_images
 from .ingestion.pos_loader import load_pos
 from .ingestion.supplier_loader import load_imports
@@ -14,14 +16,23 @@ from .matching.image_deterministic import (
     ocr_conflict_reason,
 )
 from .matching.knowledge_base import load_knowledge_base
+from .matching.product_index import ProductEvidenceIndex
 from .models import DataQualityIssue, MatchCandidate, MatchResult, POSProduct, ProductImage
 from .reporting.excel_report import write_reports
 from .reporting.html_report import write_html
 from .reporting.image_exporter import export_standard_deliverables
 from .reporting.profile_report import profile_workbooks, write_profile
 from .vision.barcode_reader import BarcodeReader
-from .vision.barcode_utils import is_gtin_like, normalize_barcode, validate_gtin
+from .vision.barcode_utils import (
+    choose_barcode_consensus,
+    is_gtin_like,
+    normalize_barcode,
+    validate_gtin,
+)
 from .vision.provider import ImageAttributes, NoOpVisionProvider, VisionProvider
+
+
+BarcodeIndex = dict[str, list[POSProduct]]
 
 
 def configure_logging(output: Path, verbose: bool = False) -> logging.Logger:
@@ -50,10 +61,26 @@ def build_ocr_provider(name: str) -> VisionProvider:
     raise ValueError(f"unsupported OCR provider: {name!r}; expected 'none' or 'paddle'")
 
 
-def _barcode_hits(value: str, products: list[POSProduct]) -> list[POSProduct]:
+def build_barcode_index(products: list[POSProduct]) -> BarcodeIndex:
+    """Build one exact normalized POS-barcode index for the entire run."""
+    index: BarcodeIndex = {}
+    for product in products:
+        normalized = normalize_barcode(product.barcode)
+        if normalized:
+            index.setdefault(normalized, []).append(product)
+    return index
+
+
+def _barcode_hits(
+    value: str,
+    products: list[POSProduct],
+    barcode_index: BarcodeIndex | None = None,
+) -> list[POSProduct]:
     normalized = normalize_barcode(value)
     if not normalized:
         return []
+    if barcode_index is not None:
+        return list(barcode_index.get(normalized, []))
     return [
         product
         for product in products
@@ -94,20 +121,74 @@ def _analyze_ocr(provider: VisionProvider, image: ProductImage) -> ImageAttribut
         return ImageAttributes(warnings=[f"ocr_provider_failed:{type(exc).__name__}"])
 
 
-def resolve_image_evidence(
-    image: ProductImage,
-    products: list[POSProduct],
-    barcode_reader: BarcodeReader | VisionProvider,
-    ocr_provider: VisionProvider | None = None,
-    top_k: int = 3,
-) -> MatchResult:
-    """Resolve one image using deterministic evidence only.
+def _analyze_capture_ocr(provider: VisionProvider, images: list[ProductImage]) -> ImageAttributes:
+    lines = []
+    warnings: list[str] = []
+    for image in preferred_ocr_images(images):
+        evidence = _analyze_ocr(provider, image)
+        lines.extend(evidence.ocr_lines)
+        warnings.extend(f"{image.filename}:{warning}" for warning in evidence.warnings)
+    return ImageAttributes(ocr_lines=lines, warnings=warnings)
 
-    Production priority is barcode -> deterministic filename -> deterministic OCR
-    review. Fuzzy similarity is intentionally absent from this function.
-    """
-    ocr_provider = ocr_provider or NoOpVisionProvider()
-    barcode_evidence = barcode_reader.analyze(image.path)
+
+def _select_capture_barcode(values: list[str]) -> str | None:
+    normalized = [normalize_barcode(value) for value in values]
+    normalized = [value for value in normalized if value]
+    valid_gtins = [value for value in normalized if is_gtin_like(value) and validate_gtin(value)]
+    distinct_valid = set(valid_gtins)
+    if len(distinct_valid) > 1:
+        return None
+    if len(distinct_valid) == 1:
+        return next(iter(distinct_valid))
+    return choose_barcode_consensus(normalized)
+
+
+def _analyze_capture_barcodes(
+    reader: BarcodeReader | VisionProvider,
+    images: list[ProductImage],
+) -> ImageAttributes:
+    values: list[str] = []
+    warnings: list[str] = []
+    for image in images:
+        try:
+            evidence = reader.analyze(image.path)
+        except Exception as exc:
+            warnings.append(f"{image.filename}:barcode_reader_failed:{type(exc).__name__}")
+            continue
+        observed = list(evidence.barcode_candidates)
+        if evidence.barcode:
+            observed.append(evidence.barcode)
+        values.extend(normalize_barcode(value) for value in observed if normalize_barcode(value))
+        warnings.extend(f"{image.filename}:{warning}" for warning in evidence.warnings)
+
+    barcode = _select_capture_barcode(values)
+    checksum_valid = validate_gtin(barcode) if barcode and is_gtin_like(barcode) else None
+    return ImageAttributes(
+        barcode=barcode,
+        barcode_candidates=values,
+        barcode_checksum_valid=checksum_valid,
+        warnings=warnings,
+    )
+
+
+def _copy_result_for_images(result: MatchResult, images: list[ProductImage]) -> list[MatchResult]:
+    return [result.model_copy(update={"image": image}) for image in images]
+
+
+def _meaningful_filename_image(images: list[ProductImage]) -> ProductImage | None:
+    return next((image for image in images if (image.raw_name or image.normalized_name).strip()), None)
+
+
+def _resolve_capture_from_evidence(
+    images: list[ProductImage],
+    products: list[POSProduct],
+    barcode_evidence: ImageAttributes,
+    ocr_provider: VisionProvider,
+    top_k: int,
+    barcode_index: BarcodeIndex | None,
+    evidence_index: ProductEvidenceIndex | None,
+) -> MatchResult:
+    representative = images[0]
 
     if barcode_evidence.barcode:
         decoded = normalize_barcode(barcode_evidence.barcode)
@@ -120,60 +201,71 @@ def resolve_image_evidence(
 
         if gtin_like and checksum_valid is False:
             return _review(
-                image,
+                representative,
                 "barcode_conflict",
                 "INVALID_GTIN_CHECK_DIGIT",
-                evidence=[f"decoded barcode rejected: {decoded}"],
+                evidence=[f"decoded barcode rejected: {decoded}", *barcode_evidence.warnings],
             )
 
-        hits = _barcode_hits(decoded, products)
+        hits = _barcode_hits(decoded, products, barcode_index)
         if not hits:
             return _review(
-                image,
+                representative,
                 "barcode_conflict",
                 "BARCODE_NOT_FOUND_IN_POS",
-                evidence=[f"decoded barcode not present in POS: {decoded}"],
+                evidence=[f"decoded barcode not present in POS: {decoded}", *barcode_evidence.warnings],
             )
         if len(hits) > 1:
             return _review(
-                image,
+                representative,
                 "barcode_conflict",
                 "DUPLICATE_POS_BARCODE",
                 hits,
-                [f"decoded barcode resolves to multiple POS rows: {decoded}"],
+                [f"decoded barcode resolves to multiple POS rows: {decoded}", *barcode_evidence.warnings],
             )
         if not gtin_like:
             return _review(
-                image,
+                representative,
                 "barcode_conflict",
                 "UNVALIDATED_NON_GTIN_BARCODE",
                 hits,
-                [f"exact non-GTIN barcode requires review: {decoded}"],
+                [f"exact non-GTIN barcode requires review: {decoded}", *barcode_evidence.warnings],
             )
 
         selected = hits[0]
-        ocr_evidence = _analyze_ocr(ocr_provider, image)
+        ocr_evidence = _analyze_capture_ocr(ocr_provider, images)
         if ocr_evidence.ocr_lines:
-            conflict = ocr_conflict_reason(ocr_evidence.ocr_lines, selected, products)
+            conflict = ocr_conflict_reason(
+                ocr_evidence.ocr_lines,
+                selected,
+                products,
+                evidence_index=evidence_index,
+            )
             if conflict:
-                ocr_candidates = find_ocr_review_candidates(ocr_evidence.ocr_lines, products, top_k=top_k)
+                ocr_candidates = find_ocr_review_candidates(
+                    ocr_evidence.ocr_lines,
+                    products,
+                    top_k=top_k,
+                    evidence_index=evidence_index,
+                )
                 candidates = [selected] + [
                     item.product for item in ocr_candidates if item.product.product_id != selected.product_id
                 ]
                 return _review(
-                    image,
+                    representative,
                     "barcode_ocr_conflict",
                     conflict,
                     candidates[: max(1, top_k)],
                     [
                         f"valid exact POS barcode: {decoded}",
-                        "OCR exact identity conflicts with barcode-selected product",
+                        "front-label OCR exact identity conflicts with barcode-selected product",
+                        *ocr_evidence.warnings,
                     ],
                 )
 
         candidate = _candidate(selected, f"exact validated decoded POS barcode: {decoded}")
         return MatchResult(
-            image=image,
+            image=representative,
             status="AUTO_MATCHED",
             candidate=candidate,
             top_candidates=[candidate],
@@ -182,27 +274,39 @@ def resolve_image_evidence(
             margin=1.0,
             match_method="exact_barcode",
             reason="unique checksum-valid decoded barcode found in POS",
-            evidence=candidate.evidence,
+            evidence=[*candidate.evidence, *barcode_evidence.warnings],
         )
 
     if barcode_evidence.barcode_candidates:
         distinct = sorted({normalize_barcode(value) for value in barcode_evidence.barcode_candidates if value})
+        valid_distinct = sorted({value for value in distinct if is_gtin_like(value) and validate_gtin(value)})
+        reason = "MULTIPLE_VALID_GTIN_VALUES" if len(valid_distinct) > 1 else "AMBIGUOUS_BARCODE_DECODE"
         return _review(
-            image,
+            representative,
             "barcode_conflict",
-            "AMBIGUOUS_BARCODE_DECODE",
-            evidence=["decoded values: " + " | ".join(distinct)],
+            reason,
+            evidence=["decoded values: " + " | ".join(distinct), *barcode_evidence.warnings],
         )
 
-    filename_result = match_filename_deterministic(image, products)
+    filename_image = _meaningful_filename_image(images)
+    filename_result = (
+        match_filename_deterministic(filename_image, products, evidence_index=evidence_index)
+        if filename_image is not None
+        else None
+    )
     if filename_result is not None and filename_result.status == "AUTO_MATCHED":
-        return filename_result
+        return filename_result.model_copy(update={"image": representative})
 
-    ocr_evidence = _analyze_ocr(ocr_provider, image)
-    ocr_candidates = find_ocr_review_candidates(ocr_evidence.ocr_lines, products, top_k=top_k)
+    ocr_evidence = _analyze_capture_ocr(ocr_provider, images)
+    ocr_candidates = find_ocr_review_candidates(
+        ocr_evidence.ocr_lines,
+        products,
+        top_k=top_k,
+        evidence_index=evidence_index,
+    )
     if ocr_candidates:
         return MatchResult(
-            image=image,
+            image=representative,
             status="NEED_REVIEW",
             candidate=None,
             top_candidates=ocr_candidates,
@@ -211,21 +315,134 @@ def resolve_image_evidence(
             reason="exact OCR evidence produced deterministic review candidates",
             evidence=[
                 "OCR candidates use canonical exact tokens/family/size rules only",
+                *barcode_evidence.warnings,
                 *ocr_evidence.warnings,
             ],
         )
 
     if filename_result is not None:
-        return filename_result
+        return filename_result.model_copy(update={"image": representative})
 
     return MatchResult(
-        image=image,
+        image=representative,
         status="UNMATCHED",
         confidence=0.0,
         match_method="none",
         reason="no deterministic barcode, filename or OCR candidate",
         evidence=[*barcode_evidence.warnings, *ocr_evidence.warnings],
     )
+
+
+def resolve_capture_evidence(
+    images: list[ProductImage],
+    products: list[POSProduct],
+    barcode_reader: BarcodeReader | VisionProvider,
+    ocr_provider: VisionProvider | None = None,
+    top_k: int = 3,
+    barcode_index: BarcodeIndex | None = None,
+    evidence_index: ProductEvidenceIndex | None = None,
+) -> list[MatchResult]:
+    """Resolve one physical product capture and assign the decision to all its images."""
+    if not images:
+        return []
+    ocr_provider = ocr_provider or NoOpVisionProvider()
+    barcode_evidence = _analyze_capture_barcodes(barcode_reader, images)
+    result = _resolve_capture_from_evidence(
+        images=images,
+        products=products,
+        barcode_evidence=barcode_evidence,
+        ocr_provider=ocr_provider,
+        top_k=top_k,
+        barcode_index=barcode_index,
+        evidence_index=evidence_index,
+    )
+    return _copy_result_for_images(result, images)
+
+
+def resolve_image_evidence(
+    image: ProductImage,
+    products: list[POSProduct],
+    barcode_reader: BarcodeReader | VisionProvider,
+    ocr_provider: VisionProvider | None = None,
+    top_k: int = 3,
+    barcode_index: BarcodeIndex | None = None,
+    evidence_index: ProductEvidenceIndex | None = None,
+) -> MatchResult:
+    """Backward-compatible single-image wrapper around capture resolution."""
+    return resolve_capture_evidence(
+        [image],
+        products,
+        barcode_reader,
+        ocr_provider,
+        top_k,
+        barcode_index,
+        evidence_index,
+    )[0]
+
+
+def _human_group_result(
+    images: list[ProductImage],
+    products: list[POSProduct],
+    kb: dict[str, dict[str, str]],
+    filename_counts: Counter[str],
+    barcode_index: BarcodeIndex,
+) -> list[MatchResult] | None:
+    """Apply human decisions only when filename keys are globally unambiguous."""
+    entries = [
+        kb[image.filename]
+        for image in images
+        if filename_counts[image.filename] == 1 and image.filename in kb
+    ]
+    if not entries:
+        return None
+
+    approved = {normalize_barcode(entry.get("barcode")) for entry in entries if entry.get("barcode")}
+    no_match = any(entry.get("selection") == "No Match" for entry in entries)
+    representative = images[0]
+
+    if len(approved) == 1 and not no_match:
+        approved_barcode = next(iter(approved))
+        hits = _barcode_hits(approved_barcode, products, barcode_index)
+        if len(hits) == 1:
+            candidate = _candidate(hits[0], "human-approved decision from knowledge base")
+            result = MatchResult(
+                image=representative,
+                status="AUTO_MATCHED",
+                candidate=candidate,
+                top_candidates=[candidate],
+                confidence=1.0,
+                top2_score=0.0,
+                margin=1.0,
+                match_method="exact_human_approved",
+                reason="human verified mapping",
+                evidence=candidate.evidence,
+            )
+        else:
+            result = _review(
+                representative,
+                "human_approved_conflict",
+                "approved barcode is missing or non-unique in current POS",
+                hits,
+            )
+        return _copy_result_for_images(result, images)
+
+    if no_match and not approved:
+        result = MatchResult(
+            image=representative,
+            status="UNMATCHED",
+            confidence=0.0,
+            match_method="exact_human_approved",
+            reason="human confirmed no match",
+        )
+        return _copy_result_for_images(result, images)
+
+    result = _review(
+        representative,
+        "human_approved_conflict",
+        "conflicting human decisions within one product capture",
+        evidence=["approved barcodes: " + " | ".join(sorted(approved))] if approved else [],
+    )
+    return _copy_result_for_images(result, images)
 
 
 def run(
@@ -270,60 +487,53 @@ def run(
     results: list[MatchResult] = []
     barcode_reader = BarcodeReader()
     ocr = build_ocr_provider(ocr_provider)
-    logger.info("barcode reader available=%s", barcode_reader.available)
+    barcode_index = build_barcode_index(products)
+    evidence_index = ProductEvidenceIndex(products)
+    capture_groups = group_product_images(parsed_images)
+    filename_counts = Counter(image.filename for image in parsed_images)
+    logger.info(
+        "barcode reader available=%s captures=%s images=%s",
+        barcode_reader.available,
+        len(capture_groups),
+        len(parsed_images),
+    )
 
     kb = load_knowledge_base(output / "knowledge_base.json")
     if not kb and Path("knowledge_base.json").exists():
         kb = load_knowledge_base(Path("knowledge_base.json"))
 
-    for index, image in enumerate(parsed_images, 1):
+    processed = 0
+    for capture in capture_groups:
         try:
-            if image.filename in kb and kb[image.filename].get("barcode"):
-                approved_barcode = normalize_barcode(kb[image.filename]["barcode"])
-                hits = _barcode_hits(approved_barcode, products)
-                if len(hits) == 1:
-                    candidate = _candidate(hits[0], "human-approved decision from knowledge base")
-                    result = MatchResult(
-                        image=image,
-                        status="AUTO_MATCHED",
-                        candidate=candidate,
-                        top_candidates=[candidate],
-                        confidence=1.0,
-                        top2_score=0.0,
-                        margin=1.0,
-                        match_method="exact_human_approved",
-                        reason="human verified mapping",
-                        evidence=candidate.evidence,
-                    )
-                else:
-                    result = _review(
-                        image,
-                        "human_approved_conflict",
-                        "approved barcode is missing or non-unique in current POS",
-                        hits,
-                    )
-            elif image.filename in kb and kb[image.filename].get("selection") == "No Match":
-                result = MatchResult(
-                    image=image,
-                    status="UNMATCHED",
-                    confidence=0.0,
-                    match_method="exact_human_approved",
-                    reason="human confirmed no match",
-                )
+            human_results = _human_group_result(capture, products, kb, filename_counts, barcode_index)
+            if human_results is not None:
+                capture_results = human_results
             else:
-                result = resolve_image_evidence(
-                    image=image,
+                capture_results = resolve_capture_evidence(
+                    images=capture,
                     products=products,
                     barcode_reader=barcode_reader,
                     ocr_provider=ocr,
                     top_k=top_k,
+                    barcode_index=barcode_index,
+                    evidence_index=evidence_index,
                 )
-            results.append(result)
+            results.extend(capture_results)
         except Exception as exc:
-            results.append(MatchResult(image=image, status="ERROR", reason="matching failed", error=str(exc)))
-            logger.exception("matching failed for %s", image.filename)
-        if index % 50 == 0:
-            logger.info("matching progress %s/%s", index, len(parsed_images))
+            for image in capture:
+                results.append(
+                    MatchResult(
+                        image=image,
+                        status="ERROR",
+                        reason="matching failed",
+                        error=str(exc),
+                    )
+                )
+            logger.exception("matching failed for capture %s", [image.filename for image in capture])
+
+        processed += len(capture)
+        if processed % 50 == 0 or processed == len(parsed_images):
+            logger.info("matching progress %s/%s", processed, len(parsed_images))
 
     write_reports(results, issues, profile, output)
     write_html(results, output)
@@ -336,6 +546,7 @@ def run(
         "pos_products": len(products),
         "imported_products": len(suppliers),
         "images": len(parsed_images),
+        "captures": len(capture_groups),
         **{key.lower(): value for key, value in counts.items()},
         **deliverables,
         "runtime_seconds": round(time.perf_counter() - started, 3),
