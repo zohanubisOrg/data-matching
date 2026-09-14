@@ -77,6 +77,66 @@ def test_invalid_gtin_blocks_filename_auto_match_and_requires_review():
     assert "INVALID_GTIN_CHECK_DIGIT" in result.reason
 
 
+def test_duplicate_pos_barcode_never_auto_matches():
+    products = [
+        product("1", "Coconut Milk 400ml", "4006381333931"),
+        product("2", "Coconut Milk Premium 400ml", "4006381333931"),
+    ]
+    barcode_reader = FixedProvider(ImageAttributes(
+        barcode="4006381333931",
+        barcode_candidates=["4006381333931"],
+        barcode_checksum_valid=True,
+    ))
+
+    result = resolve_image_evidence(
+        image("camera 0000"),
+        products,
+        barcode_reader,
+        NoOpVisionProvider(),
+    )
+
+    assert result.status == "NEED_REVIEW"
+    assert result.reason == "DUPLICATE_POS_BARCODE"
+    assert len(result.top_candidates) == 2
+
+
+def test_non_gtin_exact_barcode_is_review_only():
+    target = product("1", "Store Packed Item", "LOCAL-ABC-001")
+    barcode_reader = FixedProvider(ImageAttributes(
+        barcode="LOCAL-ABC-001",
+        barcode_candidates=["LOCAL-ABC-001"],
+        barcode_checksum_valid=None,
+    ))
+
+    result = resolve_image_evidence(
+        image("Store Packed Item"),
+        [target],
+        barcode_reader,
+        NoOpVisionProvider(),
+    )
+
+    assert result.status == "NEED_REVIEW"
+    assert result.reason == "UNVALIDATED_NON_GTIN_BARCODE"
+
+
+def test_ambiguous_barcode_decode_blocks_filename_auto_match():
+    target = product("1", "Sesame Oil 500ml", "4006381333931")
+    barcode_reader = FixedProvider(ImageAttributes(
+        barcode=None,
+        barcode_candidates=["4006381333931", "036000291452"],
+    ))
+
+    result = resolve_image_evidence(
+        image("Sesame Oil 500ml"),
+        [target],
+        barcode_reader,
+        NoOpVisionProvider(),
+    )
+
+    assert result.status == "NEED_REVIEW"
+    assert result.reason == "AMBIGUOUS_BARCODE_DECODE"
+
+
 def test_missing_barcode_can_use_unique_deterministic_filename_without_fuzzy():
     target = product("1", "Aroy-D Coconut Milk 400 ml", "4006381333931")
     barcode_reader = FixedProvider(ImageAttributes())
