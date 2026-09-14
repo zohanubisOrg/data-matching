@@ -64,11 +64,7 @@ def build_ocr_provider(name: str) -> VisionProvider:
 
 
 def build_barcode_index(products: list[POSProduct]) -> BarcodeIndex:
-    """Build exact and standards-equivalent deterministic POS barcode keys once.
-
-    Every POS row is retained. Duplicate rows/barcodes are data ambiguity and must not
-    collapse merely because they share Product ID or identical field values.
-    """
+    """Build exact and standards-equivalent deterministic POS barcode keys once."""
     index: BarcodeIndex = {}
     for product in products:
         for key in barcode_lookup_keys(product.barcode):
@@ -136,11 +132,16 @@ def _analyze_ocr(provider: VisionProvider, image: ProductImage) -> ImageAttribut
         return ImageAttributes(warnings=[f"ocr_provider_failed:{type(exc).__name__}"])
 
 
-def _analyze_capture_ocr(provider: VisionProvider, images: list[ProductImage]) -> ImageAttributes:
-    """Read front-label OCR first, falling back to one alternate image only if empty.
+def _analyze_capture_ocr(
+    provider: VisionProvider,
+    images: list[ProductImage],
+    allow_back_fallback: bool = True,
+) -> ImageAttributes:
+    """Read front-label OCR first and optionally use one alternate image as recovery.
 
-    This keeps ingredient/nutrition text on the back from contaminating a successful
-    front-label identity while still recovering OCR evidence when the front is unreadable.
+    Back-label OCR is useful only as a recovery source when there is no barcode identity.
+    It is deliberately disabled when OCR is merely verifying a checksum-valid barcode,
+    because ingredient/nutrition text must never create a false hard conflict.
     """
     lines = []
     warnings: list[str] = []
@@ -151,7 +152,7 @@ def _analyze_capture_ocr(provider: VisionProvider, images: list[ProductImage]) -
         lines.extend(evidence.ocr_lines)
         warnings.extend(f"{image.filename}:{warning}" for warning in evidence.warnings)
 
-    if lines:
+    if lines or not allow_back_fallback:
         return ImageAttributes(ocr_lines=lines, warnings=warnings)
 
     primary_paths = {image.path for image in primary}
@@ -191,36 +192,59 @@ def _observed_values(evidence: ImageAttributes) -> list[str]:
     return result
 
 
+def _analyze_barcode_image(
+    reader: BarcodeReader | VisionProvider,
+    image: ProductImage,
+    quick: bool = False,
+) -> ImageAttributes:
+    """Use a cheap secondary-side check when the reader supports it."""
+    try:
+        quick_method = getattr(reader, "analyze_quick", None)
+        if quick and callable(quick_method):
+            return quick_method(image.path)
+        return reader.analyze(image.path)
+    except Exception as exc:
+        return ImageAttributes(warnings=[f"barcode_reader_failed:{type(exc).__name__}"])
+
+
+def _valid_canonical_gtins(values: list[str]) -> set[str]:
+    result = {
+        canonical_gtin14(value)
+        for value in values
+        if is_gtin_like(value) and validate_gtin(value)
+    }
+    result.discard(None)
+    return {str(value) for value in result}
+
+
 def _analyze_capture_barcodes(
     reader: BarcodeReader | VisionProvider,
     images: list[ProductImage],
 ) -> ImageAttributes:
-    """Decode back images first and skip redundant front decoding after strong evidence."""
+    """Decode back first, then cheaply verify the paired side for capture conflicts.
+
+    A strong barcode on the back avoids a second full seven-pass scan on the front,
+    but the front is still checked so accidentally mispaired front/back photos with two
+    different valid GTINs cannot silently auto-match.
+    """
     values: list[str] = []
     warnings: list[str] = []
     backs = [image for image in images if image.image_side == "back"]
     remaining = [image for image in images if image not in backs]
-    phases = [backs, remaining] if backs else [remaining]
 
-    for phase_index, phase in enumerate(phases):
-        for image in phase:
-            try:
-                evidence = reader.analyze(image.path)
-            except Exception as exc:
-                warnings.append(f"{image.filename}:barcode_reader_failed:{type(exc).__name__}")
-                continue
-            values.extend(_observed_values(evidence))
-            warnings.extend(f"{image.filename}:{warning}" for warning in evidence.warnings)
+    primary = backs or remaining
+    secondary = remaining if backs else []
 
-        if phase_index == 0 and backs:
-            valid_canonical = {
-                canonical_gtin14(value)
-                for value in values
-                if is_gtin_like(value) and validate_gtin(value)
-            }
-            valid_canonical.discard(None)
-            if len(valid_canonical) >= 1:
-                break
+    for image in primary:
+        evidence = _analyze_barcode_image(reader, image, quick=False)
+        values.extend(_observed_values(evidence))
+        warnings.extend(f"{image.filename}:{warning}" for warning in evidence.warnings)
+
+    strong_primary = len(_valid_canonical_gtins(values)) == 1
+    for image in secondary:
+        evidence = _analyze_barcode_image(reader, image, quick=strong_primary)
+        values.extend(_observed_values(evidence))
+        warnings.extend(f"{image.filename}:{warning}" for warning in evidence.warnings)
 
     barcode = _select_capture_barcode(values)
     checksum_valid = validate_gtin(barcode) if barcode and is_gtin_like(barcode) else None
@@ -303,7 +327,9 @@ def _resolve_capture_from_evidence(
             )
 
         selected = hits[0]
-        ocr_evidence = _analyze_capture_ocr(ocr_provider, images)
+        # Barcode verification uses the front label only. Back-label OCR is too noisy to
+        # overrule a checksum-valid unique GTIN.
+        ocr_evidence = _analyze_capture_ocr(ocr_provider, images, allow_back_fallback=False)
         if ocr_evidence.ocr_lines:
             conflict = ocr_conflict_reason(
                 ocr_evidence.ocr_lines,
@@ -373,7 +399,9 @@ def _resolve_capture_from_evidence(
     if filename_result is not None and filename_result.status == "AUTO_MATCHED":
         return filename_result.model_copy(update={"image": representative})
 
-    ocr_evidence = _analyze_capture_ocr(ocr_provider, images)
+    # With no barcode identity, one back image may be used as OCR recovery evidence if
+    # the front label produced no text at all. OCR remains review-only.
+    ocr_evidence = _analyze_capture_ocr(ocr_provider, images, allow_back_fallback=True)
     ocr_candidates = find_ocr_review_candidates(
         ocr_evidence.ocr_lines,
         products,
@@ -388,9 +416,9 @@ def _resolve_capture_from_evidence(
             top_candidates=ocr_candidates,
             confidence=0.0,
             match_method="deterministic_ocr_review",
-            reason="exact OCR evidence produced deterministic review candidates",
+            reason="deterministic OCR evidence produced review candidates",
             evidence=[
-                "OCR candidates use canonical exact tokens/family/size rules only",
+                "OCR candidates use exact canonical tokens/family/size rules only",
                 *barcode_evidence.warnings,
                 *ocr_evidence.warnings,
             ],
@@ -613,8 +641,6 @@ def run(
         if processed % 50 == 0 or processed == len(parsed_images):
             logger.info("matching progress %s/%s", processed, len(parsed_images))
 
-    # Export first because the exporter performs the final cross-image conflict guard;
-    # reports written afterwards then reflect any downgrade consistently.
     deliverables = export_standard_deliverables(
         results,
         output,
