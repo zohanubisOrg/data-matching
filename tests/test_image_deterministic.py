@@ -55,6 +55,29 @@ def test_filename_match_downgrades_ambiguous_duplicate_pos_identity_to_review():
     assert len(result.top_candidates) == 2
 
 
+def test_strict_image_path_does_not_auto_match_safe_subset_name():
+    result = match_filename_deterministic(
+        image("Aloe Vera Drink Lychee 500ml"),
+        [product("1", "Aloe Vera Drink")],
+    )
+
+    assert result is not None
+    assert result.status == "NEED_REVIEW"
+    assert result.candidate is None
+    assert result.top_candidates[0].product.product_id == "1"
+
+
+def test_core_name_match_with_missing_size_is_review_not_auto_match():
+    result = match_filename_deterministic(
+        image("Sesame Oil 500ml"),
+        [product("1", "Sesame Oil")],
+    )
+
+    assert result is not None
+    assert result.status == "NEED_REVIEW"
+    assert result.candidate is None
+
+
 def test_ocr_parser_and_candidates_use_exact_tokens_not_similarity():
     lines = [OCRLine("GREEN TEA APPLE", 0.99), OCRLine("500 ML", 0.97)]
     products = [
@@ -84,3 +107,11 @@ def test_ocr_unique_exact_identity_can_conflict_with_barcode_selected_product():
 
     assert ocr_conflict_reason(lines, lemon, [apple, lemon]) == "OCR_IDENTITY_CONFLICT"
     assert ocr_conflict_reason(lines, apple, [apple, lemon]) is None
+
+
+def test_ocr_name_without_required_size_does_not_overrule_valid_barcode():
+    lines = [OCRLine("GREEN TEA APPLE", 0.99)]
+    apple = product("1", "Green Tea Apple 500ml")
+    lemon = product("2", "Green Tea Lemon 500ml")
+
+    assert ocr_conflict_reason(lines, lemon, [apple, lemon]) is None
