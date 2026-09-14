@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
 barcode = ["zxing-cpp>=2.2,<3"]
+ocr = ["paddleocr>=3,<4"]
 
 [project.scripts]
 product-mapper = "product_mapper.cli:app"
@@ -30,4 +31,3 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "--basetemp=.pytest-tmp"
-
