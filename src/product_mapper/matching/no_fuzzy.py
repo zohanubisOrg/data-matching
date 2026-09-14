@@ -17,6 +17,11 @@ _EXTRA_ALIASES = {
     "with added sugar": "addedsugar",
     "added sugar": "addedsugar",
     "sugar free": "sugarfree",
+    "purple yam": "purple yam",
+    "ube": "purple yam",
+    "atchara": "papaya pickle",
+    "sirup": "syrup",
+    "suger": "sugar",
     "glass vermicelli": "glass noodle", "glass noodles": "glass noodle",
     "glasnudler": "glass noodle", "springrolls": "spring roll",
     "spring rolls": "spring roll", "forarsruller": "spring roll",
@@ -120,12 +125,7 @@ def _canonical_text(value: object) -> str:
     return " ".join(_TOKEN_ALIASES.get(token, token) for token in text.split())
 
 
-def _extract_item_size(value: object) -> tuple[str, float] | None:
-    matches = list(_SIZE_RE.finditer(_measurement_text(value)))
-    if not matches:
-        return None
-    amount = float(matches[-1].group(1).replace(",", "."))
-    unit = matches[-1].group(2).casefold()
+def _normalized_measurement(amount: float, unit: str) -> tuple[str, float]:
     if unit == "kg": return "mass", amount * 1000
     if unit == "mg": return "mass", amount / 1000
     if unit == "g": return "mass", amount
@@ -133,6 +133,21 @@ def _extract_item_size(value: object) -> tuple[str, float] | None:
     if unit == "cl": return "volume", amount * 10
     if unit == "ml": return "volume", amount
     return "mass", amount * 28.349523125
+
+
+def _extract_item_size(value: object) -> tuple[str, float] | None:
+    text = _measurement_text(value)
+    # Compact logistics forms such as 24x500ml hide the item size from _SIZE_RE
+    # because the preceding 'x' is a word character. Parse the pack regex first.
+    pack = _PACK_SIZE_RE.search(text)
+    if pack:
+        amount = float(pack.group(1).replace(",", "."))
+        return _normalized_measurement(amount, pack.group(2).casefold())
+    matches = list(_SIZE_RE.finditer(text))
+    if not matches:
+        return None
+    amount = float(matches[-1].group(1).replace(",", "."))
+    return _normalized_measurement(amount, matches[-1].group(2).casefold())
 
 
 def _extract_case_pack(value: object) -> str:
