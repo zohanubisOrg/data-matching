@@ -124,11 +124,23 @@ def apply_review_command(
     review_file: Path = typer.Option(DEFAULT_OUTPUT / "customer_review.xlsx", "--review-file", exists=True, dir_okay=False),
     kb_file: Path = typer.Option(DEFAULT_OUTPUT / "knowledge_base.json", "--kb-file"),
 ):
-    """Imports human review decisions from customer_review.xlsx into knowledge_base.json."""
+    """Import deterministic decisions from customer_review.xlsx."""
     from .matching.knowledge_base import import_review_decisions
 
     count = import_review_decisions(review_file, kb_file)
     typer.echo(f"Successfully imported {count} review decisions into {kb_file}")
+
+
+@app.command("apply-review-json")
+def apply_review_json_command(
+    review_file: Path = typer.Option(..., "--review-file", exists=True, dir_okay=False),
+    kb_file: Path = typer.Option(DEFAULT_OUTPUT / "knowledge_base.json", "--kb-file"),
+):
+    """Import deterministic decisions exported by review_report.html."""
+    from .matching.knowledge_base import import_review_json_decisions
+
+    count = import_review_json_decisions(review_file, kb_file)
+    typer.echo(f"Successfully imported {count} JSON review decisions into {kb_file}")
 
 
 if __name__ == "__main__":
