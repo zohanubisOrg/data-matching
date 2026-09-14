@@ -27,6 +27,13 @@ def test_compact_case_pack_preserves_item_size():
     assert row["status"] == "AUTO_MATCHED"
 
 
+def test_trailing_identity_text_after_case_pack_is_not_discarded():
+    row = match("Green Tea Apple 500 ml", "Green Tea Apple 24x500ml BrandX")
+
+    assert row["status"] != "AUTO_MATCHED"
+    assert "brandx" in row["core_import_name"]
+
+
 def test_ube_and_purple_yam_are_domain_aliases_not_fuzzy():
     row = match("Purple Yam Fruit Spread", "Ube Fruit Spread")
 
