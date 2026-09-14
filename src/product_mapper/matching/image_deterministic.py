@@ -22,6 +22,17 @@ def _candidate(product: POSProduct, evidence: str) -> MatchCandidate:
 
 
 def _candidate_products_from_row(row: dict, index: ProductEvidenceIndex) -> list[POSProduct]:
+    """Restore exact POS rows from an auditable no-fuzzy result row."""
+    raw_rows = str(row.get("candidate_row_indexes", ""))
+    row_indexes = []
+    for value in raw_rows.split("|"):
+        value = value.strip()
+        if value.isdigit():
+            row_indexes.append(int(value))
+    if row_indexes:
+        return [index.products[row_index] for row_index in row_indexes if 0 <= row_index < len(index.products)]
+
+    # Backward compatibility for older report rows without row indexes.
     raw_ids = str(row.get("candidate_product_ids", ""))
     ids = [value.strip() for value in raw_ids.split("|") if value.strip()]
     result: list[POSProduct] = []
@@ -155,9 +166,8 @@ def match_filename_deterministic(
 ) -> MatchResult | None:
     """Resolve an image filename through strict deterministic no-fuzzy rules.
 
-    ``safe_subset`` remains available in the standalone import-name benchmark, but the
-    production image path treats it only as review evidence. Duplicate POS rows always
-    remain ambiguous even if their Product IDs are accidentally identical.
+    Token subset discovery is review assistance only. Duplicate POS rows always remain
+    ambiguous even when malformed source data reuses the same Product ID.
     """
     source_name = (image.raw_name or image.normalized_name or "").strip()
     if not source_name:
@@ -208,10 +218,10 @@ def match_filename_deterministic(
     if product_id and len(rows_for_id) > 1:
         reason = "DUPLICATE_POS_PRODUCT_ID_REQUIRES_REVIEW"
         top = [_candidate(product, reason) for product in rows_for_id]
-    elif row.get("status") == "AUTO_MATCHED" and method == "safe_subset":
+    elif method == "safe_subset":
         reason = "SAFE_SUBSET_REQUIRES_REVIEW"
-    elif row.get("status") == "AUTO_MATCHED" and method == "core_exact":
-        reason = "INCOMPLETE_CORE_IDENTITY"
+    elif method == "core_exact" and row.get("status") != "AUTO_MATCHED":
+        reason = str(row.get("reason") or "INCOMPLETE_CORE_IDENTITY")
 
     return MatchResult(
         image=image,
@@ -266,7 +276,7 @@ def find_ocr_exact_identity_candidates(
     products: list[POSProduct],
     evidence_index: ProductEvidenceIndex | None = None,
 ) -> list[POSProduct]:
-    """Find strong OCR identities from short contiguous label-text windows."""
+    """Find strong OCR identities from short contiguous high-confidence label windows."""
     index = evidence_index or ProductEvidenceIndex(products)
     found: dict[int, POSProduct] = {}
     for text in _ocr_windows(lines):
@@ -294,7 +304,12 @@ def find_ocr_review_candidates(
     top_k: int = 3,
     evidence_index: ProductEvidenceIndex | None = None,
 ) -> list[MatchCandidate]:
-    """Return deterministic OCR candidates for human review only."""
+    """Return deterministic OCR candidates for human review only.
+
+    Exact label identities are checked first. Broader review retrieval uses an inverted
+    exact-token index to avoid rescanning every POS row for every image, then applies
+    the full deterministic family/qualifier/size verification before ranking.
+    """
     index = evidence_index or ProductEvidenceIndex(products)
 
     exact_products = find_ocr_exact_identity_candidates(lines, products, index)
@@ -308,8 +323,10 @@ def find_ocr_review_candidates(
     if len(query["tokens"]) < 2:
         return []
 
+    candidate_rows = index.candidate_row_indexes(query["tokens"], min_overlap=2)
     ranked: list[tuple[int, int, int, POSProduct]] = []
-    for row_index, records in index.by_row.items():
+    for row_index in sorted(candidate_rows):
+        records = index.by_row.get(row_index, [])
         best = _best_indexed_identity(records, query)
         if best is None:
             continue
@@ -329,11 +346,13 @@ def ocr_conflict_reason(
     products: list[POSProduct],
     evidence_index: ProductEvidenceIndex | None = None,
 ) -> str | None:
-    """Return a hard conflict only for one complete, confident exact OCR identity."""
+    """Return a hard conflict only for one complete, confident exact OCR POS row."""
     candidates = find_ocr_exact_identity_candidates(lines, products, evidence_index)
     if len(candidates) != 1:
         return None
-    if candidates[0].product_id != selected_product.product_id:
+    # Product IDs are not reliable row identities when source POS data is malformed.
+    # The index stores the original POS objects, so object identity preserves row truth.
+    if candidates[0] is not selected_product:
         return "OCR_IDENTITY_CONFLICT"
     return None
 
