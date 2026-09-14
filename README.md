@@ -1,57 +1,81 @@
 # Product Image POS Reconciliation Tool
 
-This tool reconciles supplier/store product images against the POS workbook. POS is the source of truth for Product ID, SKU and Barcode. Supplier/source IDs are never treated as POS identifiers.
+This tool reconciles supplier/store product images against the POS workbook. POS remains the source of truth for Product ID, SKU and Barcode. Supplier/source IDs are never treated as POS identifiers.
 
-The production `run` pipeline is now **strict no-fuzzy**: fuzzy-name similarity is never allowed to create `AUTO_MATCHED`. The priority is human-approved mapping -> validated exact barcode -> deterministic canonical filename -> deterministic OCR review candidate -> review/unmatched.
+The production `run` pipeline is **strict no-fuzzy**: edit distance, RapidFuzz scores, embedding similarity and fuzzy-name thresholds cannot create `AUTO_MATCHED`. Production identity priority is human-approved exact POS row -> checksum-valid barcode/GTIN -> strict canonical filename identity -> deterministic OCR review -> review/unmatched.
 
 ## Install on Windows PowerShell
+
+Create the environment:
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
 ```
 
-For barcode decoding:
+Production barcode-first install (no RapidFuzz dependency):
+
+```powershell
+python -m pip install -e ".[barcode]"
+```
+
+Development/test install also includes the isolated legacy fuzzy dependency because historical matcher tests still exist:
 
 ```powershell
 python -m pip install -e ".[dev,barcode]"
 ```
 
-For optional PaddleOCR 3.x evidence extraction, install the PaddlePaddle CPU runtime first, then the project OCR extra:
+For optional PaddleOCR 3.x evidence extraction, install PaddlePaddle first, then the OCR extra:
 
 ```powershell
 python -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
 python -m pip install -e ".[dev,barcode,ocr]"
 ```
 
-PaddleOCR is optional. Barcode-only/local deterministic matching works without it.
+PaddleOCR is optional. Barcode-only deterministic reconciliation works without it.
 
 ## Strict production matching policy
 
-The `run` command uses this decision order:
+The `run` command uses this order:
 
-1. **Human-approved knowledge base** -> exact deterministic match when the approved barcode resolves uniquely.
-2. **Barcode-first** -> multi-pass `zxing-cpp` decoding, normalization, GTIN checksum validation and exact POS lookup.
-3. **Deterministic filename** -> existing no-fuzzy canonical rules only, with ambiguous POS identities downgraded to review.
-4. **OCR evidence** -> PaddleOCR extracts visible text/scores/polygons; exact canonical token/family/size rules nominate review candidates.
-5. **Review / unmatched** -> uncertain, conflicting or incomplete evidence is never guessed.
+1. **Human-approved identity** — Product ID + SKU + Barcode tuple is resolved against the current POS row. Legacy barcode-only approvals remain supported but cannot disambiguate duplicated POS barcodes.
+2. **Barcode-first** — multi-pass `zxing-cpp`, EXIF orientation correction, GTIN checksum validation, EAN/UPC/GTIN-14 standards-equivalent lookup, exact POS resolution.
+3. **Deterministic filename** — canonical/core exact identity only. Safe token-subset retrieval is review assistance, never identity proof.
+4. **OCR evidence** — PaddleOCR extracts visible text, confidence and polygons. OCR can verify a barcode or nominate deterministic review candidates; OCR-only evidence does not auto-match.
+5. **Review / unmatched** — incomplete, ambiguous or conflicting evidence is never guessed.
 
-Important safety rules:
+Safety rules include:
 
-- A GTIN-like barcode with a bad check digit is never auto-matched.
-- A decoded barcode missing from POS or duplicated in POS goes to `NEED_REVIEW`.
-- A non-GTIN barcode can be shown as an exact review candidate but is not auto-matched by the production policy.
-- If OCR deterministically identifies a different product from a checksum-valid barcode result, the record goes to `NEED_REVIEW`.
-- OCR-only candidates are review candidates in this phase; OCR does not silently decide SKU identity.
-- `rapidfuzz` remains in legacy/manual name-matching utilities, but the production `run` pipeline does not import or call the fuzzy image matcher.
+- invalid GTIN check digit -> `NEED_REVIEW`;
+- barcode missing from POS -> `NEED_REVIEW`;
+- duplicated/equivalent POS barcode -> `NEED_REVIEW` until a human selects an exact POS row;
+- two different valid GTINs across a front/back capture -> `NEED_REVIEW`;
+- exact/core identity with conflicting size -> never auto-match;
+- core identity with size present on only one side -> `NEED_REVIEW`;
+- token subset / extra unknown identity tokens -> `NEED_REVIEW`;
+- protected qualifiers such as color, processing state, protein type and sugar state cannot silently disagree;
+- `No Added Sugar` is kept as identity evidence and is not collapsed by stop-word removal;
+- a matched result is only delivered as `MATCHED` if its canonical JPEG export succeeds.
+
+Observed domain aliases such as `ube -> purple yam`, `atchara -> papaya pickle`, `sirup -> syrup` and known supplier spelling corrections are explicit deterministic dictionary rules. They are not generated by fuzzy matching.
+
+## Front/back capture protocol
+
+For new store photos, use one capture ID per physical product:
+
+```text
+000123_front.jpg
+000123_back.jpg
+000124_front.jpg
+000124_back.jpg
+```
+
+The unique pair may be in the same folder or separate `front/` and `back/` folders. If a capture ID is reused by multiple packs, the pipeline deliberately avoids cross-pairing ambiguous images. Barcode decoding prefers the back image, while OCR verification prefers the front label. A strong back barcode still receives a cheap secondary-side barcode check so a mispaired front/back product cannot silently pass.
 
 ## Run
 
-From the repository root:
-
-### Barcode-first, OCR disabled
+Barcode-first without OCR:
 
 ```powershell
 python -m product_mapper.cli run `
@@ -64,7 +88,7 @@ python -m product_mapper.cli run `
   --verbose
 ```
 
-### Barcode-first + PaddleOCR evidence
+Barcode-first with PaddleOCR evidence:
 
 ```powershell
 python -m product_mapper.cli run `
@@ -77,32 +101,89 @@ python -m product_mapper.cli run `
   --verbose
 ```
 
-Defaults are both image folders, the two supplied workbooks, `output`, and `--ocr-provider none`. `python -m product_mapper run` is also supported.
+The strict CLI exposes no fuzzy thresholds. The Python `run()` signature retains legacy threshold arguments only for API compatibility; the production path ignores them.
 
-`--auto-threshold` and `--review-threshold` are retained for CLI/API compatibility but are intentionally ignored by the strict production `run` path. They are not allowed to turn similarity into an auto-match.
-
-To profile without matching:
+Profile only:
 
 ```powershell
 python -m product_mapper.cli profile
 ```
 
-To benchmark the import names against POS names without images or fuzzy scoring:
+Deterministic name benchmark without images:
 
 ```powershell
 python -m product_mapper.cli match-names-no-fuzzy --output .\output\no-fuzzy
 ```
 
-The deterministic report separates safe name matches, unique POS identity resolution, review candidates, and unmatched rows. Supplier SKU and POS identifiers are retained for audit only; they never influence name candidate selection.
+Historical `match-names` remains an isolated legacy fuzzy benchmark. It is not imported by the production image pipeline and must never be used as proof of SKU identity.
 
-The legacy `match-names` command is still available for historical/manual benchmarking. It is separate from the strict production image pipeline and must not be used as evidence that an image is the same SKU.
+## POS and input quality safeguards
+
+POS ingestion reports missing/duplicate Product ID, SKU and Barcode as before, plus invalid GTIN check digits, normalized barcode collisions and standards-equivalent EAN/UPC/GTIN collisions. POS values are reported but never repaired or synthesized by the matcher.
+
+Image ingestion validates files in one traversal. Exact duplicate detection hashes only same-byte-size candidates instead of hashing every image, reducing I/O on 1000+ image batches. Duplicate filenames are reported because filename-keyed human decisions are unsafe when names are not unique.
+
+## Outputs
+
+```text
+output/
+├── matched-images/          # <barcode>.jpg, <barcode>_2.jpg, ...
+├── images/                  # canonical matched JPEG mirror
+├── unmatched-images/        # collision-safe preserved unresolved originals
+├── review/                  # review originals
+├── unmatched/               # unresolved originals
+├── result.xlsx / result.csv
+├── mapping.xlsx / mapping.csv
+├── reconciliation_report.txt
+├── mapping_result.xlsx / .csv / .json
+├── customer_result.xlsx
+├── customer_review.xlsx
+├── review_report.html
+├── data_profile.xlsx
+├── knowledge_base.json
+└── run.log
+```
+
+Matched images are canonical JPEG files. Review/unmatched images retain their original bytes and receive collision-safe destination names when two source folders contain the same filename. The reconciliation report does not claim measured accuracy without a gold dataset.
+
+## Human review feedback loop
+
+`customer_review.xlsx` keeps per-image audit sheets but the interactive `Review` sheet emits one decision row per unambiguous front/back capture. Candidate decisions persist Product ID + SKU + Barcode, so a human can resolve two POS rows that share the same barcode.
+
+Excel workflow:
+
+```powershell
+python -m product_mapper.cli apply-review `
+  --review-file .\output\customer_review.xlsx `
+  --kb-file .\output\knowledge_base.json
+```
+
+`review_report.html` also exports `reviewed_knowledge.json`. Import it with:
+
+```powershell
+python -m product_mapper.cli apply-review-json `
+  --review-file .\reviewed_knowledge.json `
+  --kb-file .\output\knowledge_base.json
+```
+
+On rerun, a current POS row must still resolve uniquely from the approved tuple. If the POS changed and the tuple becomes missing/inconsistent, the item returns to review rather than silently trusting stale knowledge.
 
 ## Local verification
 
-No GitHub Actions workflow is required for this change. Run locally:
+GitHub Actions is intentionally not required for this branch. Run locally:
 
 ```powershell
 python -m pip install -e ".[dev,barcode]"
+
+pytest tests/test_no_fuzzy_matching.py -q
+pytest tests/test_domain_canonicalization.py -q
+pytest tests/test_barcode_evidence.py tests/test_barcode_reader.py -q
+pytest tests/test_barcode_first_pipeline.py tests/test_strict_audit_round2.py -q
+pytest tests/test_pos_barcode_quality.py -q
+pytest tests/test_review_identity.py -q
+pytest tests/test_export_integrity_round2.py tests/test_unresolved_export_collisions.py -q
+pytest tests/test_reporting_audit.py -q
+
 pytest -q
 ```
 
@@ -111,68 +192,30 @@ For OCR-enabled verification:
 ```powershell
 python -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
 python -m pip install -e ".[dev,barcode,ocr]"
+pytest tests/test_ocr_provider.py tests/test_image_deterministic.py -q
 pytest -q
 ```
 
-Then run a barcode-only smoke test and an OCR-enabled smoke test against the real image folders.
+Then run one barcode-only smoke test and one OCR-enabled smoke test against the real image folders. Benchmark runtime separately for barcode-only and PaddleOCR modes; do not infer performance from unit tests.
 
-## Acceptance Criteria & Definition of Done
+## Accuracy and gold dataset
 
-This project strictly adheres to the output-based Definition of Done (DoD) and 15 Pass/Fail acceptance criteria defined in `ACCEPTANCE_CRITERIA.md`.
+The design target is zero silent wrong matches: uncertain evidence is intentionally sent to `REVIEW`/`UNMATCHED`. This policy is not the same as measured 100% accuracy.
 
-Key principles:
-- **100% Accounted For**: Every input image and POS product has a clear, tracked status.
-- **100% Accuracy in Matched Dataset**: Uncertain or ambiguous matches are separated into `REVIEW`/`UNMATCHED`. Zero tolerance for silent wrong matches.
-- **Canonical Barcode Filenames**: All matched images are copied to `output/matched-images/<barcode>.jpg`.
-- **Identity Preservation**: Original Barcode and SKU from POS are never modified or synthesized.
+Create a representative `gold_dataset.csv` with at least 50-100 known rows covering duplicate names, duplicate/equivalent barcodes, variants, sizes, sugar states, front/back mispairing, barcode failures, OCR failures and difficult product families. Until that dataset is evaluated locally, production accuracy remains **NOT MEASURED**.
 
-## Outputs & Deliverables
-
-The run creates the complete customer delivery package in `output`:
-
-```text
-output/
-├── matched-images/ & images/# Canonical <barcode>.jpg images ready for website import
-├── unmatched-images/        # Original unresolved/review images preserved (zero data loss)
-├── review/                  # Ambiguous images needing customer confirmation
-├── unmatched/               # Images without matching candidates
-├── result.xlsx / result.csv # Canonical 7-column client deliverable (Barcode | SKU | Original Name | Final Name | Original Image | Final Image | Status)
-├── mapping.xlsx / mapping.csv# Comprehensive audit trail
-├── reconciliation_report.txt# Formal reconciliation report verifying 100% input accounting
-├── mapping_result.xlsx      # Comprehensive multi-sheet audit report
-├── customer_review.xlsx     # Interactive review workbook with top candidates
-├── review_report.html       # Visual HTML report for side-by-side inspection
-├── data_profile.xlsx        # Data profiling and quality analysis
-└── run.log                  # Execution trace log
-```
-
-## Human Review & Feedback Loop (Rerun Capability)
-
-1. Open `customer_review.xlsx`, select a candidate or `No Match` under `Customer Selection`.
-2. Save the workbook and run:
-
-```powershell
-python -m product_mapper.cli apply-review
-```
-
-This persists approved decisions into `knowledge_base.json`. On subsequent runs these items are matched deterministically at `exact_human_approved` priority, avoiding repeat manual work.
-
-## Gold dataset
-
-Optional `gold_dataset.csv` at project root:
+Example:
 
 ```csv
 image_filename,expected_product_id
 heuschen_10517_sesame_oil.jpg,11633374
 ```
 
-Create 50-100 rows covering duplicate names, variants, sizes, each source, barcode failures, OCR failures and difficult cases. Until a representative gold dataset is evaluated, do not claim a measured production accuracy percentage.
+## Troubleshooting
 
-## Troubleshooting and extension
-
-- If a workbook schema changes, `profile` reports missing required columns before matching.
-- If `zxing-cpp` is unavailable, the log records barcode decoding as unavailable and the pipeline continues with deterministic filename/OCR evidence.
+- If a workbook schema changes, `profile` reports required-column failures before matching.
+- If `zxing-cpp` is unavailable, barcode decoding is reported unavailable and the pipeline falls back to deterministic filename/OCR evidence.
 - If PaddleOCR is unavailable, use `--ocr-provider none` or install a compatible PaddlePaddle runtime plus the `ocr` extra.
-- If PaddleOCR fails on an individual image, the image remains auditable and falls back to deterministic review/unmatched behavior; OCR failure never creates a match.
-- Add supplier aliases only where workbook/domain evidence supports them.
-- Expand protected product attributes only from observed product-domain evidence; do not use edit-distance guesses to create aliases.
+- OCR failure never creates a match; the item remains auditable and falls back to review/unmatched behavior.
+- Add aliases only from observed domain/business evidence. Never generate aliases from edit distance.
+- Add protected attributes when the catalog proves they distinguish SKUs; prefer review over guessing.
