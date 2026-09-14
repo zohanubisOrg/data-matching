@@ -96,7 +96,7 @@ def test_duplicate_pos_barcode_never_auto_matches():
     )
 
     assert result.status == "NEED_REVIEW"
-    assert result.reason == "DUPLICATE_POS_BARCODE"
+    assert result.reason == "DUPLICATE_OR_EQUIVALENT_POS_BARCODE"
     assert len(result.top_candidates) == 2
 
 
@@ -119,7 +119,7 @@ def test_non_gtin_exact_barcode_is_review_only():
     assert result.reason == "UNVALIDATED_NON_GTIN_BARCODE"
 
 
-def test_ambiguous_barcode_decode_blocks_filename_auto_match():
+def test_multiple_valid_barcode_decodes_block_filename_auto_match():
     target = product("1", "Sesame Oil 500ml", "4006381333931")
     barcode_reader = FixedProvider(ImageAttributes(
         barcode=None,
@@ -134,7 +134,7 @@ def test_ambiguous_barcode_decode_blocks_filename_auto_match():
     )
 
     assert result.status == "NEED_REVIEW"
-    assert result.reason == "AMBIGUOUS_BARCODE_DECODE"
+    assert result.reason == "MULTIPLE_VALID_GTIN_VALUES"
 
 
 def test_missing_barcode_can_use_unique_deterministic_filename_without_fuzzy():
