@@ -241,10 +241,12 @@ def _best_indexed_identity(
 
 
 def _ocr_windows(lines: list[OCRLine], min_confidence: float = 0.65, max_window: int = 3) -> list[str]:
+    # Hard conflicts need scored OCR evidence. Unknown/zero confidence remains usable
+    # for human review through parse_ocr_identity(), but cannot overrule a valid GTIN.
     accepted = [
         str(line.text).strip()
         for line in lines
-        if str(line.text).strip() and (line.confidence <= 0 or line.confidence >= min_confidence)
+        if str(line.text).strip() and line.confidence >= min_confidence
     ]
     windows: list[str] = []
     for start in range(len(accepted)):
@@ -324,7 +326,7 @@ def ocr_conflict_reason(
     products: list[POSProduct],
     evidence_index: ProductEvidenceIndex | None = None,
 ) -> str | None:
-    """Return a hard conflict only for one complete exact contiguous OCR identity."""
+    """Return a hard conflict only for one complete, confident exact OCR identity."""
     candidates = find_ocr_exact_identity_candidates(lines, products, evidence_index)
     if len(candidates) != 1:
         return None
