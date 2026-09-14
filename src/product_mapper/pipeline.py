@@ -64,13 +64,15 @@ def build_ocr_provider(name: str) -> VisionProvider:
 
 
 def build_barcode_index(products: list[POSProduct]) -> BarcodeIndex:
-    """Build exact and standards-equivalent deterministic POS barcode keys once."""
+    """Build exact and standards-equivalent deterministic POS barcode keys once.
+
+    Every POS row is retained. Duplicate rows/barcodes are data ambiguity and must not
+    collapse merely because they share Product ID or identical field values.
+    """
     index: BarcodeIndex = {}
     for product in products:
         for key in barcode_lookup_keys(product.barcode):
-            bucket = index.setdefault(key, [])
-            if all(existing.product_id != product.product_id for existing in bucket):
-                bucket.append(product)
+            index.setdefault(key, []).append(product)
     return index
 
 
@@ -83,18 +85,22 @@ def _barcode_hits(
     if not keys:
         return []
 
-    found: dict[str, POSProduct] = {}
+    result: list[POSProduct] = []
+    seen_rows: set[int] = set()
     if barcode_index is not None:
         for key in keys:
             for product in barcode_index.get(key, []):
-                found[product.product_id] = product
-        return [found[key] for key in sorted(found)]
+                row_identity = id(product)
+                if row_identity not in seen_rows:
+                    result.append(product)
+                    seen_rows.add(row_identity)
+        return result
 
     query_keys = set(keys)
     for product in products:
         if query_keys.intersection(barcode_lookup_keys(product.barcode)):
-            found[product.product_id] = product
-    return [found[key] for key in sorted(found)]
+            result.append(product)
+    return result
 
 
 def _candidate(product: POSProduct, evidence: str) -> MatchCandidate:
@@ -213,8 +219,6 @@ def _analyze_capture_barcodes(
                 if is_gtin_like(value) and validate_gtin(value)
             }
             valid_canonical.discard(None)
-            # One valid barcode from the intentional back-side capture is enough;
-            # front OCR later provides an independent product-label cross-check.
             if len(valid_canonical) >= 1:
                 break
 
@@ -315,7 +319,7 @@ def _resolve_capture_from_evidence(
                     evidence_index=evidence_index,
                 )
                 candidates = [selected] + [
-                    item.product for item in ocr_candidates if item.product.product_id != selected.product_id
+                    item.product for item in ocr_candidates if item.product is not selected
                 ]
                 return _review(
                     representative,
@@ -340,7 +344,7 @@ def _resolve_capture_from_evidence(
             top2_score=0.0,
             margin=1.0,
             match_method="exact_barcode",
-            reason="unique checksum-valid barcode/GTIN resolved to one POS identity",
+            reason="unique checksum-valid barcode/GTIN resolved to one POS row",
             evidence=[*candidate.evidence, *barcode_evidence.warnings],
         )
 
@@ -553,6 +557,7 @@ def run(
     suppliers, import_meta = load_imports(imports)
     parsed_images, image_issues, image_meta = load_images(images)
     issues: list[DataQualityIssue] = pos_issues + image_issues
+    invalid_input_count = sum(issue.issue_type == "invalid image or filename" for issue in image_issues)
     profile = profile_workbooks(pos, imports, images, pos_meta, import_meta, image_meta, issues)
     write_profile(profile, output)
 
@@ -564,10 +569,11 @@ def run(
     capture_groups = group_product_images(parsed_images)
     filename_counts = Counter(image.filename.casefold() for image in parsed_images)
     logger.info(
-        "barcode reader available=%s captures=%s images=%s",
+        "barcode reader available=%s captures=%s valid_images=%s invalid_inputs=%s",
         barcode_reader.available,
         len(capture_groups),
         len(parsed_images),
+        invalid_input_count,
     )
 
     kb = load_knowledge_base(output / "knowledge_base.json")
@@ -607,9 +613,17 @@ def run(
         if processed % 50 == 0 or processed == len(parsed_images):
             logger.info("matching progress %s/%s", processed, len(parsed_images))
 
+    # Export first because the exporter performs the final cross-image conflict guard;
+    # reports written afterwards then reflect any downgrade consistently.
+    deliverables = export_standard_deliverables(
+        results,
+        output,
+        total_pos_count=len(products),
+        invalid_input_count=invalid_input_count,
+    )
     write_reports(results, issues, profile, output)
     write_html(results, output)
-    deliverables = export_standard_deliverables(results, output, total_pos_count=len(products))
+
     counts = {
         status: sum(result.status == status for result in results)
         for status in ["AUTO_MATCHED", "NEED_REVIEW", "UNMATCHED", "ERROR"]
