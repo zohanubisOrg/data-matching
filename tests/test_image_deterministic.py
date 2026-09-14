@@ -55,6 +55,21 @@ def test_filename_match_downgrades_ambiguous_duplicate_pos_identity_to_review():
     assert len(result.top_candidates) == 2
 
 
+def test_duplicate_pos_rows_with_same_product_id_are_review_not_auto():
+    first = product("1", "Sesame Oil 500ml")
+    second = first.model_copy()
+
+    result = match_filename_deterministic(
+        image("Sesame Oil 500ml"),
+        [first, second],
+    )
+
+    assert result is not None
+    assert result.status == "NEED_REVIEW"
+    assert result.candidate is None
+    assert len(result.top_candidates) == 2
+
+
 def test_strict_image_path_does_not_auto_match_safe_subset_name():
     result = match_filename_deterministic(
         image("Aloe Vera Drink Lychee 500ml"),
