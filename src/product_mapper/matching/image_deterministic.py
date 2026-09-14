@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import defaultdict
+
 from ..models import MatchCandidate, MatchResult, POSProduct, ProductImage, SupplierProduct
 from ..parsing.ocr_parser import parse_ocr_identity
 from ..vision.provider import OCRLine
@@ -9,6 +11,7 @@ from .no_fuzzy import (
     _size_relation,
     match_import_names_no_fuzzy,
 )
+from .product_index import IndexedProductIdentity, ProductEvidenceIndex
 
 
 def _candidate(product: POSProduct, evidence: str) -> MatchCandidate:
@@ -33,15 +36,83 @@ def _candidate_products_from_row(row: dict, products: list[POSProduct]) -> list[
     return result
 
 
-def match_filename_deterministic(image: ProductImage, products: list[POSProduct]) -> MatchResult | None:
-    """Resolve an image filename through the existing deterministic no-fuzzy matcher.
+def _identity_compatible(query: dict, identity: dict) -> tuple[bool, bool]:
+    if query["family"] and identity["family"] and query["family"] != identity["family"]:
+        return False, False
+    if _qualifier_conflict(query["tokens"], identity["tokens"]):
+        return False, False
+    size_exact, size_conflict = _size_relation(query["item_size"], identity["item_size"])
+    if size_conflict:
+        return False, False
+    return True, size_exact
 
-    Ambiguous POS identity is always downgraded to review even when the canonical
-    product text is identical.
+
+def _fast_exact_filename(
+    image: ProductImage,
+    index: ProductEvidenceIndex,
+) -> MatchResult | None:
+    source_name = (image.raw_name or image.normalized_name or "").strip()
+    if not source_name:
+        return None
+    query = _identity(source_name)
+    records = index.by_full.get(query["full"], []) or index.by_core.get(query["core"], [])
+    if not records:
+        return None
+
+    products: dict[str, POSProduct] = {}
+    for record in records:
+        compatible, _ = _identity_compatible(query, record.identity)
+        if compatible:
+            products[record.product.product_id] = record.product
+    if not products:
+        return None
+
+    ordered = [products[key] for key in sorted(products)]
+    top = [_candidate(product, "deterministic indexed filename candidate") for product in ordered]
+    if len(ordered) == 1:
+        chosen = top[0]
+        return MatchResult(
+            image=image,
+            status="AUTO_MATCHED",
+            candidate=chosen,
+            top_candidates=[chosen],
+            confidence=1.0,
+            top2_score=0.0,
+            margin=1.0,
+            match_method="deterministic_filename",
+            reason="indexed canonical/core exact no-fuzzy match",
+            evidence=chosen.evidence,
+        )
+    return MatchResult(
+        image=image,
+        status="NEED_REVIEW",
+        candidate=None,
+        top_candidates=top,
+        confidence=0.0,
+        match_method="deterministic_filename_review",
+        reason="multiple deterministic indexed filename identities",
+        evidence=["deterministic filename candidates only; no fuzzy score used"],
+    )
+
+
+def match_filename_deterministic(
+    image: ProductImage,
+    products: list[POSProduct],
+    evidence_index: ProductEvidenceIndex | None = None,
+) -> MatchResult | None:
+    """Resolve an image filename through deterministic no-fuzzy rules.
+
+    Canonical/core exact names use a run-scoped precomputed index. Harder safe-subset
+    legacy names fall back to the existing no-fuzzy matcher so behavior is preserved.
     """
     source_name = (image.raw_name or image.normalized_name or "").strip()
     if not source_name:
         return None
+
+    if evidence_index is not None:
+        fast = _fast_exact_filename(image, evidence_index)
+        if fast is not None:
+            return fast
 
     supplier = SupplierProduct(
         name=source_name,
@@ -57,7 +128,7 @@ def match_filename_deterministic(image: ProductImage, products: list[POSProduct]
     top = [_candidate(product, "deterministic canonical filename candidate") for product in candidate_products]
 
     product_id = str(row.get("pos_product_id", "")).strip()
-    by_id = {product.product_id: product for product in products}
+    by_id = evidence_index.by_id if evidence_index is not None else {product.product_id: product for product in products}
     if (
         row.get("status") == "AUTO_MATCHED"
         and not row.get("pos_identity_ambiguous")
@@ -90,25 +161,19 @@ def match_filename_deterministic(image: ProductImage, products: list[POSProduct]
     )
 
 
-def _best_identity(product: POSProduct, query: dict) -> tuple[dict, bool] | None:
-    identities = [
-        _identity(value)
-        for value in (product.product_name, product.official_name, product.printer_name)
-        if value
-    ]
+def _best_indexed_identity(
+    records: list[IndexedProductIdentity],
+    query: dict,
+) -> tuple[dict, bool] | None:
     valid: list[tuple[dict, bool]] = []
-    for identity in identities:
+    for record in records:
+        identity = record.identity
         tokens = identity["tokens"]
         if len(tokens) < 2 or not tokens.issubset(query["tokens"]):
             continue
-        if query["family"] and identity["family"] and query["family"] != identity["family"]:
-            continue
-        if _qualifier_conflict(query["tokens"], tokens):
-            continue
-        size_exact, size_conflict = _size_relation(query["item_size"], identity["item_size"])
-        if size_conflict:
-            continue
-        valid.append((identity, size_exact))
+        compatible, size_exact = _identity_compatible(query, identity)
+        if compatible:
+            valid.append((identity, size_exact))
     if not valid:
         return None
     return max(valid, key=lambda item: (len(item[0]["tokens"]), int(item[1])))
@@ -118,23 +183,29 @@ def find_ocr_review_candidates(
     lines: list[OCRLine],
     products: list[POSProduct],
     top_k: int = 3,
+    evidence_index: ProductEvidenceIndex | None = None,
 ) -> list[MatchCandidate]:
-    """Return exact deterministic OCR candidates for human review.
+    """Return deterministic OCR candidates for human review only.
 
-    Candidate discovery uses canonical token containment, family/qualifier rules and
-    size conflict rejection. There is no edit distance, embedding or fuzzy score.
+    OCR review may use token containment, but product identities are canonicalized once
+    per run when an index is supplied. No edit distance or fuzzy/embedding score exists.
     """
     query = parse_ocr_identity(lines)
     if len(query["tokens"]) < 2:
         return []
 
+    index = evidence_index or ProductEvidenceIndex(products)
+    by_product: dict[str, list[IndexedProductIdentity]] = defaultdict(list)
+    for record in index.identities:
+        by_product[record.product.product_id].append(record)
+
     ranked: list[tuple[int, int, str, POSProduct]] = []
-    for product in products:
-        best = _best_identity(product, query)
+    for product_id, records in by_product.items():
+        best = _best_indexed_identity(records, query)
         if best is None:
             continue
         identity, size_exact = best
-        ranked.append((len(identity["tokens"]), int(size_exact), product.product_id, product))
+        ranked.append((len(identity["tokens"]), int(size_exact), product_id, records[0].product))
 
     ranked.sort(key=lambda row: (-row[0], -row[1], row[2]))
     return [
@@ -143,25 +214,66 @@ def find_ocr_review_candidates(
     ]
 
 
+def _ocr_windows(lines: list[OCRLine], min_confidence: float = 0.65, max_window: int = 3) -> list[str]:
+    accepted = [
+        str(line.text).strip()
+        for line in lines
+        if str(line.text).strip() and (line.confidence <= 0 or line.confidence >= min_confidence)
+    ]
+    windows: list[str] = []
+    for start in range(len(accepted)):
+        for width in range(1, max_window + 1):
+            chunk = accepted[start : start + width]
+            if len(chunk) != width:
+                break
+            windows.append(" ".join(chunk))
+    return windows
+
+
+def find_ocr_exact_identity_candidates(
+    lines: list[OCRLine],
+    products: list[POSProduct],
+    evidence_index: ProductEvidenceIndex | None = None,
+) -> list[POSProduct]:
+    """Find strong OCR identities from short contiguous label-text windows.
+
+    This intentionally avoids treating all packaging text (ingredients, nutrition,
+    importer copy) as one product name. It is used only for hard barcode conflicts.
+    """
+    index = evidence_index or ProductEvidenceIndex(products)
+    found: dict[str, POSProduct] = {}
+    for text in _ocr_windows(lines):
+        query = _identity(text)
+        records = index.by_full.get(query["full"], []) or index.by_core.get(query["core"], [])
+        for record in records:
+            compatible, _ = _identity_compatible(query, record.identity)
+            if compatible:
+                found[record.product.product_id] = record.product
+    return [found[key] for key in sorted(found)]
+
+
 def ocr_conflict_reason(
     lines: list[OCRLine],
     selected_product: POSProduct,
     products: list[POSProduct],
+    evidence_index: ProductEvidenceIndex | None = None,
 ) -> str | None:
-    """Return a hard OCR conflict only when OCR resolves one different exact identity.
+    """Return a hard conflict only for one exact contiguous OCR identity.
 
-    Missing/noisy OCR is deliberately not a conflict because a valid unique barcode
-    remains stronger evidence than incomplete text recognition.
+    Broad token containment is useful for review suggestions but too noisy to overrule
+    a checksum-valid barcode. Hard conflicts therefore require an exact short OCR
+    window that resolves uniquely to another POS product.
     """
-    candidates = find_ocr_review_candidates(lines, products, top_k=3)
+    candidates = find_ocr_exact_identity_candidates(lines, products, evidence_index)
     if len(candidates) != 1:
         return None
-    if candidates[0].product.product_id != selected_product.product_id:
+    if candidates[0].product_id != selected_product.product_id:
         return "OCR_IDENTITY_CONFLICT"
     return None
 
 
 __all__ = [
+    "find_ocr_exact_identity_candidates",
     "find_ocr_review_candidates",
     "match_filename_deterministic",
     "ocr_conflict_reason",
