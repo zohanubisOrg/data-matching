@@ -65,8 +65,37 @@ def _cell_text(row: tuple, col_map: dict[str, int], header: str) -> str:
     return str(row[index] or "").strip()
 
 
+def _approved_entry(
+    selection: str,
+    barcode: str = "",
+    product_id: str = "",
+    sku: str = "",
+    source: str = "customer_review",
+) -> dict[str, str] | None:
+    selection = str(selection or "").strip()
+    if selection in {"1", "2", "3"}:
+        if not any(str(value or "").strip() for value in (barcode, product_id, sku)):
+            return None
+        return {
+            "barcode": str(barcode or "").strip(),
+            "product_id": str(product_id or "").strip(),
+            "sku": str(sku or "").strip(),
+            "selection": selection,
+            "source": str(source or "customer_review").strip() or "customer_review",
+        }
+    if selection.casefold() in {"no match", "nomatch"}:
+        return {
+            "barcode": "",
+            "product_id": "",
+            "sku": "",
+            "selection": "No Match",
+            "source": str(source or "customer_review").strip() or "customer_review",
+        }
+    return None
+
+
 def import_review_decisions(review_file: Path, kb_file: Path) -> int:
-    """Persist customer review selections as deterministic POS identity tuples."""
+    """Persist customer Excel review selections as deterministic POS identity tuples."""
     if not review_file.exists():
         raise FileNotFoundError(f"Review workbook not found: {review_file}")
 
@@ -92,26 +121,47 @@ def import_review_decisions(review_file: Path, kb_file: Path) -> int:
 
         if selection in {"1", "2", "3"}:
             candidate_index = int(selection)
-            barcode = _cell_text(row, col_map, f"Candidate {candidate_index} Barcode")
-            product_id = _cell_text(row, col_map, f"Candidate {candidate_index} Product ID")
-            sku = _cell_text(row, col_map, f"Candidate {candidate_index} SKU")
-            if barcode or product_id or sku:
-                kb[image_name] = {
-                    "barcode": barcode,
-                    "product_id": product_id,
-                    "sku": sku,
-                    "selection": selection,
-                    "source": "customer_review",
-                }
-                added_count += 1
-        elif selection.casefold() in {"no match", "nomatch"}:
-            kb[image_name] = {
-                "barcode": "",
-                "product_id": "",
-                "sku": "",
-                "selection": "No Match",
-                "source": "customer_review",
-            }
+            entry = _approved_entry(
+                selection=selection,
+                barcode=_cell_text(row, col_map, f"Candidate {candidate_index} Barcode"),
+                product_id=_cell_text(row, col_map, f"Candidate {candidate_index} Product ID"),
+                sku=_cell_text(row, col_map, f"Candidate {candidate_index} SKU"),
+                source="customer_review",
+            )
+        else:
+            entry = _approved_entry(selection=selection, source="customer_review")
+
+        if entry is not None:
+            kb[image_name] = entry
+            added_count += 1
+
+    save_knowledge_base(kb, kb_file)
+    return added_count
+
+
+def import_review_json_decisions(review_file: Path, kb_file: Path) -> int:
+    """Merge decisions exported by review_report.html into the deterministic KB."""
+    if not review_file.exists():
+        raise FileNotFoundError(f"Review JSON not found: {review_file}")
+    data = json.loads(review_file.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Review JSON root must be an object keyed by image filename")
+
+    kb = load_knowledge_base(kb_file)
+    added_count = 0
+    for raw_image_name, raw_entry in data.items():
+        image_name = str(raw_image_name or "").strip()
+        if not image_name or not isinstance(raw_entry, dict):
+            continue
+        entry = _approved_entry(
+            selection=str(raw_entry.get("selection") or ""),
+            barcode=str(raw_entry.get("barcode") or ""),
+            product_id=str(raw_entry.get("product_id") or ""),
+            sku=str(raw_entry.get("sku") or ""),
+            source=str(raw_entry.get("source") or "review_report_html"),
+        )
+        if entry is not None:
+            kb[image_name] = entry
             added_count += 1
 
     save_knowledge_base(kb, kb_file)
