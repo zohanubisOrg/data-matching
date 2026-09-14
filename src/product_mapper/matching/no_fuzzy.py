@@ -11,6 +11,12 @@ from ..parsing.text_normalizer import GERMAN_VIET_SYNONYMS, normalize_text, stri
 
 _SPECIAL_CHARS = str.maketrans({"ø": "o", "æ": "ae", "œ": "oe", "ß": "ss"})
 _EXTRA_ALIASES = {
+    "no added sugar": "noaddedsugar",
+    "no sugar added": "noaddedsugar",
+    "without added sugar": "noaddedsugar",
+    "with added sugar": "addedsugar",
+    "added sugar": "addedsugar",
+    "sugar free": "sugarfree",
     "glass vermicelli": "glass noodle", "glass noodles": "glass noodle",
     "glasnudler": "glass noodle", "springrolls": "spring roll",
     "spring rolls": "spring roll", "forarsruller": "spring roll",
@@ -45,7 +51,7 @@ _TOKEN_ALIASES = {
 }
 _STOP_WORDS = {
     "a", "an", "and", "case", "de", "es", "for", "fur", "in", "it",
-    "med", "mit", "no", "of", "origin", "pack", "se", "style", "the",
+    "med", "mit", "of", "origin", "pack", "se", "style", "the",
     "type", "typ", "with",
 }
 _LOGISTICS = {"x", "pc", "pcs", "stk"}
@@ -74,7 +80,8 @@ _QUALIFIER_GROUPS = (
     {"beef", "chicken", "duck", "fish", "pork", "shrimp", "vegetable"},
     {"hot", "mild", "spicy"},
     {"fresh", "frozen", "dried", "fried", "pickled", "raw", "roasted", "steamed"},
-    {"salted", "unsalted"}, {"sweetened", "unsweetened"},
+    {"salted", "unsalted"},
+    {"sweetened", "unsweetened", "noaddedsugar", "addedsugar", "sugarfree"},
     {"glutinous", "nonglutinous"}, {"firm", "silken", "soft"},
     {"glutenfree", "vegan", "vegetarian"},
 )
@@ -161,17 +168,21 @@ def _identity(value: object) -> dict:
     full = _canonical_text(value)
     core = _core_text(value)
     return {
-        "full": full, "core": core, "tokens": frozenset(core.split()),
-        "family": _product_family(_canonical_text(_description_text(value))), "item_size": _extract_item_size(value),
+        "full": full,
+        "core": core,
+        "tokens": frozenset(core.split()),
+        "family": _product_family(_canonical_text(_description_text(value))),
+        "item_size": _extract_item_size(value),
         "case_pack": _extract_case_pack(value),
     }
 
 
 def _size_relation(left: tuple[str, float] | None, right: tuple[str, float] | None) -> tuple[bool, bool]:
-    if not left or not right: return False, False
-    if left[0] != right[0]: return False, True
-    tolerance = max(1.0, 0.02 * max(left[1], right[1]))
-    exact = abs(left[1] - right[1]) <= tolerance
+    if not left or not right:
+        return False, False
+    if left[0] != right[0]:
+        return False, True
+    exact = abs(left[1] - right[1]) <= 1e-6
     return exact, not exact
 
 
@@ -182,7 +193,8 @@ def _format_item_size(item_size: tuple[str, float] | None) -> str:
 def _qualifier_conflict(query_tokens: frozenset[str], candidate_tokens: frozenset[str]) -> bool:
     for group in _QUALIFIER_GROUPS:
         query_values, candidate_values = query_tokens & group, candidate_tokens & group
-        if query_values and candidate_values and query_values.isdisjoint(candidate_values): return True
+        if query_values and candidate_values and query_values.isdisjoint(candidate_values):
+            return True
     return False
 
 
@@ -192,22 +204,33 @@ def _missing_protected_qualifier(query_tokens: frozenset[str], candidate_tokens:
 
 def _name_records(products: list[POSProduct]) -> list[dict]:
     records = []
-    for product in products:
-        for field, raw_name in (("product_name", product.product_name), ("official_name", product.official_name), ("printer_name", product.printer_name)):
+    for row_index, product in enumerate(products):
+        for field, raw_name in (
+            ("product_name", product.product_name),
+            ("official_name", product.official_name),
+            ("printer_name", product.printer_name),
+        ):
             if raw_name:
-                records.append({"product": product, "field": field, "raw_name": raw_name, "identity": _identity(raw_name)})
+                records.append({
+                    "row_index": row_index,
+                    "product": product,
+                    "field": field,
+                    "raw_name": raw_name,
+                    "identity": _identity(raw_name),
+                })
     return records
 
 
 def _dedupe_products(records: list[dict], query: dict) -> list[dict]:
-    best = {}
+    """Deduplicate name fields per POS row, never across distinct POS rows."""
+    best: dict[int, dict] = {}
     for record in records:
         size_exact, _ = _size_relation(query["item_size"], record["identity"]["item_size"])
         rank = (int(size_exact), len(record["identity"]["tokens"]), -_FIELD_ORDER[record["field"]])
-        product_id = record["product"].product_id
-        if product_id not in best or rank > best[product_id]["rank"]:
-            best[product_id] = {**record, "rank": rank}
-    return [value for _, value in sorted(best.items())]
+        row_index = int(record["row_index"])
+        if row_index not in best or rank > best[row_index]["rank"]:
+            best[row_index] = {**record, "rank": rank}
+    return [best[key] for key in sorted(best)]
 
 
 def _group_key(record: dict) -> tuple[str, tuple[str, float] | None]:
@@ -216,33 +239,60 @@ def _group_key(record: dict) -> tuple[str, tuple[str, float] | None]:
 
 
 def _candidate_summary(records: list[dict]) -> dict[str, str]:
-    products = {record["product"].product_id: record["product"] for record in records}
-    ordered = [products[key] for key in sorted(products)]
+    ordered = sorted(records, key=lambda record: int(record["row_index"]))
     return {
-        "candidate_names": " | ".join(sorted({record["raw_name"] for record in records})),
-        "candidate_product_ids": " | ".join(product.product_id for product in ordered),
-        "candidate_skus": " | ".join(product.sku for product in ordered),
-        "candidate_barcodes": " | ".join(product.barcode or "" for product in ordered),
+        "candidate_names": " | ".join(record["raw_name"] for record in ordered),
+        "candidate_product_ids": " | ".join(record["product"].product_id for record in ordered),
+        "candidate_skus": " | ".join(record["product"].sku for record in ordered),
+        "candidate_barcodes": " | ".join(record["product"].barcode or "" for record in ordered),
+        "candidate_row_indexes": " | ".join(str(record["row_index"]) for record in ordered),
     }
 
 
-def _result_row(source: SupplierProduct, query: dict, status: str, method: str, records: list[dict], reason: str = "", **flags) -> dict:
+def _result_row(
+    source: SupplierProduct,
+    query: dict,
+    status: str,
+    method: str,
+    records: list[dict],
+    reason: str = "",
+    **flags,
+) -> dict:
     records = _dedupe_products(records, query)
     groups = {_group_key(record) for record in records}
-    products = {record["product"].product_id: record["product"] for record in records}
     representative_record = records[0] if records else None
     representative = representative_record["product"] if representative_record else None
-    ambiguous = len(products) > 1
+    ambiguous = len(records) > 1
     expose_identity = status == "AUTO_MATCHED" and not ambiguous and representative is not None
-    candidate_data = _candidate_summary(records) if records else {key: "" for key in ("candidate_names", "candidate_product_ids", "candidate_skus", "candidate_barcodes")}
+    empty_candidates = {
+        key: ""
+        for key in (
+            "candidate_names",
+            "candidate_product_ids",
+            "candidate_skus",
+            "candidate_barcodes",
+            "candidate_row_indexes",
+        )
+    }
+    candidate_data = _candidate_summary(records) if records else empty_candidates
     return {
-        "sheet": source.sheet, "supplier": source.supplier, "supplier_sku": source.supplier_sku or "",
-        "import_name": source.name, "canonical_import_name": query["full"],
-        "core_import_name": query["core"], "product_family": query["family"],
+        "sheet": source.sheet,
+        "supplier": source.supplier,
+        "supplier_sku": source.supplier_sku or "",
+        "import_name": source.name,
+        "canonical_import_name": query["full"],
+        "core_import_name": query["core"],
+        "product_family": query["family"],
         "item_size": _format_item_size(query["item_size"]),
-        "case_pack": query["case_pack"], "status": status, "match_method": method,
-        "reason": reason, "candidate_group_count": len(groups), "matched_pos_rows": len(products),
-        "pos_identity_ambiguous": ambiguous, "size_conflict": bool(flags.get("size_conflict")),
+        "case_pack": query["case_pack"],
+        "status": status,
+        "match_method": method,
+        "reason": reason,
+        "candidate_group_count": len(groups),
+        "matched_pos_rows": len(records),
+        "pos_identity_ambiguous": ambiguous,
+        "size_conflict": bool(flags.get("size_conflict")),
+        "size_evidence_incomplete": bool(flags.get("size_evidence_incomplete")),
         "family_conflict": bool(flags.get("family_conflict")),
         "qualifier_conflict": bool(flags.get("qualifier_conflict")),
         "missing_protected_qualifier": bool(flags.get("missing_protected_qualifier")),
@@ -259,14 +309,19 @@ def _result_row(source: SupplierProduct, query: dict, status: str, method: str, 
 
 
 def match_import_names_no_fuzzy(products: list[POSProduct], imports: list[SupplierProduct]) -> list[dict]:
-    """Match names deterministically; images, IDs, similarity scores and thresholds are never evidence."""
+    """Match names deterministically with precision-first identity rules.
+
+    Only unique canonical/core exact identities can auto-match. Token subset discovery
+    is review assistance only and never identity proof.
+    """
     records = _name_records(products)
     full_index, core_index, token_index = defaultdict(list), defaultdict(list), defaultdict(list)
     for record in records:
         identity = record["identity"]
         full_index[identity["full"]].append(record)
         core_index[identity["core"]].append(record)
-        for token in identity["tokens"]: token_index[token].append(record)
+        for token in identity["tokens"]:
+            token_index[token].append(record)
 
     rows = []
     for source in imports:
@@ -278,8 +333,13 @@ def match_import_names_no_fuzzy(products: list[POSProduct], imports: list[Suppli
             method, possible = "safe_subset", {}
             for token in query["tokens"]:
                 for record in token_index.get(token, []):
-                    possible[(record["product"].product_id, record["field"])] = record
-            candidates = [record for record in possible.values() if len(record["identity"]["tokens"]) >= 2 and record["identity"]["tokens"].issubset(query["tokens"])]
+                    possible[(record["row_index"], record["field"])] = record
+            candidates = [
+                record
+                for record in possible.values()
+                if len(record["identity"]["tokens"]) >= 2
+                and record["identity"]["tokens"].issubset(query["tokens"])
+            ]
         if not candidates:
             rows.append(_result_row(source, query, "UNMATCHED", "none", [], "no_deterministic_candidate"))
             continue
@@ -288,42 +348,129 @@ def match_import_names_no_fuzzy(products: list[POSProduct], imports: list[Suppli
         for record in _dedupe_products(candidates, query):
             identity = record["identity"]
             size_exact, size_conflict = _size_relation(query["item_size"], identity["item_size"])
-            family_conflict = bool(query["family"] and ((identity["family"] and query["family"] != identity["family"]) or (not identity["family"] and identity["tokens"] != query["tokens"])))
+            size_incomplete = method == "core_exact" and bool(query["item_size"]) != bool(identity["item_size"])
+            family_conflict = bool(
+                query["family"]
+                and (
+                    (identity["family"] and query["family"] != identity["family"])
+                    or (not identity["family"] and identity["tokens"] != query["tokens"])
+                )
+            )
             qualifier_conflict = _qualifier_conflict(query["tokens"], identity["tokens"])
             missing_qualifier = _missing_protected_qualifier(query["tokens"], identity["tokens"])
             if size_conflict or family_conflict or qualifier_conflict or missing_qualifier:
                 conflicts.append(record)
-                conflict_flags.update({"size_conflict": size_conflict, "family_conflict": family_conflict, "qualifier_conflict": qualifier_conflict, "missing_protected_qualifier": missing_qualifier})
+                conflict_flags.update({
+                    "size_conflict": size_conflict,
+                    "family_conflict": family_conflict,
+                    "qualifier_conflict": qualifier_conflict,
+                    "missing_protected_qualifier": missing_qualifier,
+                })
             else:
-                record["rank"] = (int(size_exact), len(identity["tokens"]), -_FIELD_ORDER[record["field"]])
+                record["rank"] = (
+                    int(size_exact),
+                    int(not size_incomplete),
+                    len(identity["tokens"]),
+                    -_FIELD_ORDER[record["field"]],
+                )
+                record["size_evidence_incomplete"] = size_incomplete
                 clean.append(record)
 
         if clean:
-            best_rank = max(record["rank"][:2] for record in clean)
-            selected = _dedupe_products([record for record in clean if record["rank"][:2] == best_rank], query)
-            if len({_group_key(record) for record in selected}) == 1:
-                rows.append(_result_row(source, query, "AUTO_MATCHED", method, selected))
+            best_rank = max(record["rank"][:3] for record in clean)
+            selected = _dedupe_products(
+                [record for record in clean if record["rank"][:3] == best_rank],
+                query,
+            )
+            has_incomplete_size = any(record.get("size_evidence_incomplete") for record in selected)
+            groups = {_group_key(record) for record in selected}
+            if method == "safe_subset":
+                rows.append(_result_row(
+                    source,
+                    query,
+                    "REVIEW",
+                    method,
+                    selected,
+                    "SAFE_SUBSET_REQUIRES_REVIEW",
+                ))
+            elif len(selected) != 1:
+                rows.append(_result_row(
+                    source,
+                    query,
+                    "REVIEW",
+                    method,
+                    selected,
+                    "MULTIPLE_POS_ROWS_FOR_DETERMINISTIC_IDENTITY",
+                ))
+            elif len(groups) != 1:
+                rows.append(_result_row(
+                    source,
+                    query,
+                    "REVIEW",
+                    method,
+                    selected,
+                    "multiple_deterministic_candidates",
+                ))
+            elif has_incomplete_size:
+                rows.append(_result_row(
+                    source,
+                    query,
+                    "REVIEW",
+                    method,
+                    selected,
+                    "INCOMPLETE_SIZE_EVIDENCE",
+                    size_evidence_incomplete=True,
+                ))
             else:
-                rows.append(_result_row(source, query, "REVIEW", method, selected, "multiple_deterministic_candidates"))
+                rows.append(_result_row(source, query, "AUTO_MATCHED", method, selected))
         else:
-            active = [name for name in ("size_conflict", "family_conflict", "qualifier_conflict", "missing_protected_qualifier") if conflict_flags[name]]
-            rows.append(_result_row(source, query, "REVIEW", method, conflicts, ",".join(active) or "deterministic_conflict", **conflict_flags))
+            active = [
+                name
+                for name in (
+                    "size_conflict",
+                    "family_conflict",
+                    "qualifier_conflict",
+                    "missing_protected_qualifier",
+                )
+                if conflict_flags[name]
+            ]
+            rows.append(_result_row(
+                source,
+                query,
+                "REVIEW",
+                method,
+                conflicts,
+                ",".join(active) or "deterministic_conflict",
+                **conflict_flags,
+            ))
     return rows
 
 
 def summarize_no_fuzzy_matches(rows: list[dict]) -> dict:
     counts, total = Counter(str(row.get("status", "UNMATCHED")) for row in rows), len(rows)
     auto, review, unmatched = counts["AUTO_MATCHED"], counts["REVIEW"], counts["UNMATCHED"]
-    resolved = sum(row.get("status") == "AUTO_MATCHED" and not row.get("pos_identity_ambiguous") and bool(row.get("pos_product_id")) and bool(row.get("pos_sku")) for row in rows)
+    resolved = sum(
+        row.get("status") == "AUTO_MATCHED"
+        and not row.get("pos_identity_ambiguous")
+        and bool(row.get("pos_product_id"))
+        and bool(row.get("pos_sku"))
+        for row in rows
+    )
     pct = lambda value: round(value / total * 100, 2) if total else 0.0
     return {
         "total_import_rows": total,
         "unique_import_names": len({str(row.get("import_name", "")).strip() for row in rows}),
-        "auto_matched": auto, "unique_pos_identity_resolved": resolved,
-        "review": review, "unmatched": unmatched, "auto_match_rate_pct": pct(auto),
-        "unique_pos_identity_rate_pct": pct(resolved), "review_rate_pct": pct(review),
-        "unmatched_rate_pct": pct(unmatched), "candidate_coverage_pct": pct(auto + review),
-        "target_auto_ge_80": pct(auto) >= 80, "target_review_lt_20": pct(review) < 20,
+        "auto_matched": auto,
+        "unique_pos_identity_resolved": resolved,
+        "review": review,
+        "unmatched": unmatched,
+        "auto_match_rate_pct": pct(auto),
+        "unique_pos_identity_rate_pct": pct(resolved),
+        "review_rate_pct": pct(review),
+        "unmatched_rate_pct": pct(unmatched),
+        "candidate_coverage_pct": pct(auto + review),
+        "target_auto_ge_80": pct(auto) >= 80,
+        "target_review_lt_20": pct(review) < 20,
         "match_method_counts": dict(Counter(str(row.get("match_method", "none")) for row in rows)),
     }
 
@@ -338,7 +485,13 @@ def write_no_fuzzy_outputs(rows: list[dict], summary: dict, output_dir: Path):
     summary_path = output / "no_fuzzy_summary.json"
     frame = pd.DataFrame(rows)
     frame.to_csv(csv_path, index=False, encoding="utf-8-sig")
-    summary_frame = pd.DataFrame([{"metric": key, "value": json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value} for key, value in summary.items()])
+    summary_frame = pd.DataFrame([
+        {
+            "metric": key,
+            "value": json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value,
+        }
+        for key, value in summary.items()
+    ])
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
         summary_frame.to_excel(writer, sheet_name="summary", index=False)
         frame.to_excel(writer, sheet_name="matches", index=False)
@@ -349,6 +502,9 @@ def write_no_fuzzy_outputs(rows: list[dict], summary: dict, output_dir: Path):
                 cell.font = Font(bold=True, color="FFFFFF")
                 cell.fill = PatternFill(fill_type="solid", fgColor="1F4E78")
             for column in worksheet.columns:
-                worksheet.column_dimensions[column[0].column_letter].width = min(48, max(12, max(len(str(cell.value or "")) for cell in column) + 2))
+                worksheet.column_dimensions[column[0].column_letter].width = min(
+                    48,
+                    max(12, max(len(str(cell.value or "")) for cell in column) + 2),
+                )
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"xlsx": xlsx_path, "csv": csv_path, "summary_json": summary_path}
