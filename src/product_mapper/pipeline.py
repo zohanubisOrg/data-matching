@@ -24,6 +24,8 @@ from .reporting.image_exporter import export_standard_deliverables
 from .reporting.profile_report import profile_workbooks, write_profile
 from .vision.barcode_reader import BarcodeReader
 from .vision.barcode_utils import (
+    barcode_lookup_keys,
+    canonical_gtin14,
     choose_barcode_consensus,
     is_gtin_like,
     normalize_barcode,
@@ -62,12 +64,13 @@ def build_ocr_provider(name: str) -> VisionProvider:
 
 
 def build_barcode_index(products: list[POSProduct]) -> BarcodeIndex:
-    """Build one exact normalized POS-barcode index for the entire run."""
+    """Build exact and standards-equivalent deterministic POS barcode keys once."""
     index: BarcodeIndex = {}
     for product in products:
-        normalized = normalize_barcode(product.barcode)
-        if normalized:
-            index.setdefault(normalized, []).append(product)
+        for key in barcode_lookup_keys(product.barcode):
+            bucket = index.setdefault(key, [])
+            if all(existing.product_id != product.product_id for existing in bucket):
+                bucket.append(product)
     return index
 
 
@@ -76,16 +79,22 @@ def _barcode_hits(
     products: list[POSProduct],
     barcode_index: BarcodeIndex | None = None,
 ) -> list[POSProduct]:
-    normalized = normalize_barcode(value)
-    if not normalized:
+    keys = barcode_lookup_keys(value)
+    if not keys:
         return []
+
+    found: dict[str, POSProduct] = {}
     if barcode_index is not None:
-        return list(barcode_index.get(normalized, []))
-    return [
-        product
-        for product in products
-        if product.barcode and normalize_barcode(product.barcode) == normalized
-    ]
+        for key in keys:
+            for product in barcode_index.get(key, []):
+                found[product.product_id] = product
+        return [found[key] for key in sorted(found)]
+
+    query_keys = set(keys)
+    for product in products:
+        if query_keys.intersection(barcode_lookup_keys(product.barcode)):
+            found[product.product_id] = product
+    return [found[key] for key in sorted(found)]
 
 
 def _candidate(product: POSProduct, evidence: str) -> MatchCandidate:
@@ -135,31 +144,63 @@ def _select_capture_barcode(values: list[str]) -> str | None:
     normalized = [normalize_barcode(value) for value in values]
     normalized = [value for value in normalized if value]
     valid_gtins = [value for value in normalized if is_gtin_like(value) and validate_gtin(value)]
-    distinct_valid = set(valid_gtins)
-    if len(distinct_valid) > 1:
+    canonical_valid = {canonical_gtin14(value) for value in valid_gtins}
+    canonical_valid.discard(None)
+    if len(canonical_valid) > 1:
         return None
-    if len(distinct_valid) == 1:
-        return next(iter(distinct_valid))
+    if len(canonical_valid) == 1:
+        target = next(iter(canonical_valid))
+        equivalent = [value for value in valid_gtins if canonical_gtin14(value) == target]
+        return choose_barcode_consensus(equivalent) or equivalent[0]
     return choose_barcode_consensus(normalized)
+
+
+def _observed_values(evidence: ImageAttributes) -> list[str]:
+    values = list(evidence.barcode_candidates)
+    if evidence.barcode:
+        values.append(evidence.barcode)
+    result: list[str] = []
+    for value in values:
+        normalized = normalize_barcode(value)
+        if normalized:
+            result.append(normalized)
+    return result
 
 
 def _analyze_capture_barcodes(
     reader: BarcodeReader | VisionProvider,
     images: list[ProductImage],
 ) -> ImageAttributes:
+    """Decode back images first and skip redundant front decoding after strong evidence."""
     values: list[str] = []
     warnings: list[str] = []
-    for image in images:
-        try:
-            evidence = reader.analyze(image.path)
-        except Exception as exc:
-            warnings.append(f"{image.filename}:barcode_reader_failed:{type(exc).__name__}")
-            continue
-        observed = list(evidence.barcode_candidates)
-        if evidence.barcode:
-            observed.append(evidence.barcode)
-        values.extend(normalize_barcode(value) for value in observed if normalize_barcode(value))
-        warnings.extend(f"{image.filename}:{warning}" for warning in evidence.warnings)
+    backs = [image for image in images if image.image_side == "back"]
+    remaining = [image for image in images if image not in backs]
+    phases = [backs, remaining] if backs else [remaining]
+
+    for phase_index, phase in enumerate(phases):
+        for image in phase:
+            try:
+                evidence = reader.analyze(image.path)
+            except Exception as exc:
+                warnings.append(f"{image.filename}:barcode_reader_failed:{type(exc).__name__}")
+                continue
+            values.extend(_observed_values(evidence))
+            warnings.extend(f"{image.filename}:{warning}" for warning in evidence.warnings)
+
+        if phase_index == 0 and backs:
+            valid_canonical = {
+                canonical_gtin14(value)
+                for value in values
+                if is_gtin_like(value) and validate_gtin(value)
+            }
+            valid_canonical.discard(None)
+            # One valid barcode from the intentional back-side capture is enough;
+            # front OCR later provides an independent product-label cross-check.
+            if len(valid_canonical) == 1:
+                break
+            if len(valid_canonical) > 1:
+                break
 
     barcode = _select_capture_barcode(values)
     checksum_valid = validate_gtin(barcode) if barcode and is_gtin_like(barcode) else None
@@ -177,6 +218,15 @@ def _copy_result_for_images(result: MatchResult, images: list[ProductImage]) -> 
 
 def _meaningful_filename_image(images: list[ProductImage]) -> ProductImage | None:
     return next((image for image in images if (image.raw_name or image.normalized_name).strip()), None)
+
+
+def _barcode_evidence_label(decoded: str, selected: POSProduct) -> str:
+    selected_barcode = normalize_barcode(selected.barcode)
+    if decoded == selected_barcode:
+        return f"exact validated decoded POS barcode: {decoded}"
+    if canonical_gtin14(decoded) and canonical_gtin14(decoded) == canonical_gtin14(selected_barcode):
+        return f"validated standards-equivalent GTIN: image={decoded} POS={selected_barcode}"
+    return f"validated deterministic barcode resolution: image={decoded} POS={selected_barcode}"
 
 
 def _resolve_capture_from_evidence(
@@ -219,7 +269,7 @@ def _resolve_capture_from_evidence(
             return _review(
                 representative,
                 "barcode_conflict",
-                "DUPLICATE_POS_BARCODE",
+                "DUPLICATE_OR_EQUIVALENT_POS_BARCODE",
                 hits,
                 [f"decoded barcode resolves to multiple POS rows: {decoded}", *barcode_evidence.warnings],
             )
@@ -257,13 +307,14 @@ def _resolve_capture_from_evidence(
                     conflict,
                     candidates[: max(1, top_k)],
                     [
-                        f"valid exact POS barcode: {decoded}",
+                        _barcode_evidence_label(decoded, selected),
                         "front-label OCR exact identity conflicts with barcode-selected product",
                         *ocr_evidence.warnings,
                     ],
                 )
 
-        candidate = _candidate(selected, f"exact validated decoded POS barcode: {decoded}")
+        evidence_text = _barcode_evidence_label(decoded, selected)
+        candidate = _candidate(selected, evidence_text)
         return MatchResult(
             image=representative,
             status="AUTO_MATCHED",
@@ -273,14 +324,19 @@ def _resolve_capture_from_evidence(
             top2_score=0.0,
             margin=1.0,
             match_method="exact_barcode",
-            reason="unique checksum-valid decoded barcode found in POS",
+            reason="unique checksum-valid barcode/GTIN resolved to one POS identity",
             evidence=[*candidate.evidence, *barcode_evidence.warnings],
         )
 
     if barcode_evidence.barcode_candidates:
         distinct = sorted({normalize_barcode(value) for value in barcode_evidence.barcode_candidates if value})
-        valid_distinct = sorted({value for value in distinct if is_gtin_like(value) and validate_gtin(value)})
-        reason = "MULTIPLE_VALID_GTIN_VALUES" if len(valid_distinct) > 1 else "AMBIGUOUS_BARCODE_DECODE"
+        valid_canonical = {
+            canonical_gtin14(value)
+            for value in distinct
+            if is_gtin_like(value) and validate_gtin(value)
+        }
+        valid_canonical.discard(None)
+        reason = "MULTIPLE_VALID_GTIN_VALUES" if len(valid_canonical) > 1 else "AMBIGUOUS_BARCODE_DECODE"
         return _review(
             representative,
             "barcode_conflict",
@@ -458,8 +514,8 @@ def run(
 ) -> dict:
     """Run the strict production image reconciliation pipeline.
 
-    auto_threshold/review_threshold are retained for CLI/API compatibility but are
-    not used by the strict deterministic production path.
+    auto_threshold/review_threshold are retained for API compatibility but are not used
+    by the strict deterministic production path.
     """
     started = time.perf_counter()
     images = images or DEFAULT_IMAGES
