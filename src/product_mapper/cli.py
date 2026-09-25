@@ -1,5 +1,11 @@
-from pathlib import Path
 import json
+import sys
+from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import typer
 
@@ -87,6 +93,22 @@ def apply_review_command(
     from .matching.knowledge_base import import_review_decisions
     count = import_review_decisions(review_file, kb_file)
     typer.echo(f"Successfully imported {count} review decisions into {kb_file}")
+
+
+@app.command("process-g1")
+def process_g1_command(
+    images: Path = typer.Option(Path("G1_original"), "--images", exists=True, file_okay=False),
+    output: Path = typer.Option(Path("output/g1_delivery"), "--output"),
+    limit: int | None = typer.Option(None, "--limit", help="Optional limit on number of images to process"),
+):
+    """Process G1_original images: barcode scanning, vision extraction, clustering, front-image splitting, and deliverables generation."""
+    from dotenv import load_dotenv
+    load_dotenv(".env")
+    from .g1_pipeline import G1BatchPipeline
+
+    pipeline = G1BatchPipeline(images_dir=images, output_dir=output)
+    products = pipeline.run(limit=limit)
+    typer.echo(f"Completed G1 batch processing! Created {len(products)} products in {output}")
 
 
 if __name__ == "__main__": app()
