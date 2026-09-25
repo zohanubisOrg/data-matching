@@ -1,8 +1,45 @@
+# Python & Virtual Environments
 __pycache__/
 *.py[cod]
+*$py.class
 .pytest_cache/
 .pytest-tmp/
 .venv/
+env/
+venv/
 *.egg-info/
+dist/
+build/
+
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Heavy Raw Images & Temporary Excel Lock Files
+G1_original/
+unique_pack1/
+unique_pack2/
+~$*.xlsx
+~$*.xls
+
+# Processing Output (Preserve directory structure via .gitkeep)
 output/*
 !output/.gitkeep
+
+# Next.js / Web Portal
+web/node_modules/
+web/.next/
+web/.vercel/
+web/out/
+web/build/
+
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

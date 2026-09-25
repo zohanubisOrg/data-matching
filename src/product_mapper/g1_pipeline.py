@@ -390,6 +390,12 @@ class G1BatchPipeline:
                 self._export_results(products)
 
         self._export_results(products)
+        try:
+            from scripts.prepare_web_delivery import sync_web_assets
+            print("\nTriggering auto-sync to web/public for Vercel deployment...")
+            sync_web_assets()
+        except Exception as e:
+            print(f"Notice: Web auto-sync skipped: {e}")
         return products
 
     def _export_results(self, products: list[G1ProductItem]) -> None:
