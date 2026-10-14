@@ -1,45 +1,186 @@
-# Python & Virtual Environments
+# ==========================================
+# 1. Python & Môi Trường Ảo (Virtual Environments)
+# ==========================================
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+
+# Cấu hình môi trường ảo
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Package & Build
+*.egg-info/
+*.egg
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+.installed.cfg
+
+# Kiểm thử & Phân tích mã (Pytest, Coverage, Linters)
 .pytest_cache/
 .pytest-tmp/
-.venv/
-env/
-venv/
-*.egg-info/
-dist/
-build/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+dmypy.json
+.dmypy.json
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Environment Variables
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+
+# ==========================================
+# 2. Node.js, Next.js & Frontend Web Portal
+# ==========================================
+**/node_modules/
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+**/.next/
+**/.vercel/
+**/out/
+web/build/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Package manager debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+
+# ==========================================
+# 3. Bảo Mật & Biến Môi Trường (Secrets & Env)
+# ==========================================
 .env
+.env.*
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+# Ngoại lệ: Cho phép file mẫu nếu có
+!.env.example
+!.env.sample
 
-# Heavy Raw Images & Temporary Excel Lock Files
+# Chứng chỉ, khoá bí mật & Service Accounts
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+*credentials*.json
+*service_account*.json
+*client_secret*.json
+
+
+# ==========================================
+# 4. Dữ Liệu Nặng, Ảnh Gốc & File Khách Hàng (Raw Data)
+# ==========================================
+# Thư mục chứa GBs ảnh gốc và tài liệu thô
+source-import/
 G1_original/
 unique_pack1/
 unique_pack2/
+chrome_profile/
+/data/
+temp_inspect/
+*.pt
+web/public/data/*.xlsx
+
+# File Excel dữ liệu thô / dump ở thư mục gốc
+customer-send-me.xlsx
+
+# File khoá tạm thời của Microsoft Excel / Office
 ~$*.xlsx
 ~$*.xls
+~$*.csv
 
-# Processing Output (Preserve directory structure via .gitkeep)
+
+# ==========================================
+# 5. Thư Mục Output Xử Lý (Processing Output)
+# ==========================================
+# Bỏ qua toàn bộ kết quả render/export ngoại trừ file giữ thư mục .gitkeep
 output/*
 !output/.gitkeep
 
-# Next.js / Web Portal
-web/node_modules/
-web/.next/
-web/.vercel/
-web/out/
-web/build/
 
-# Operating System & IDE
-.DS_Store
-Thumbs.db
+# ==========================================
+# 6. Công Cụ AI & IDE / Code Editors
+# ==========================================
+# Workspace cache của các trợ lý AI
+.gemini/
+.claude/
+.cursor/
+.agents/
+
+# Editor configs & cache
 .vscode/
+!.vscode/extensions.json
 .idea/
+*.sublime-project
+*.sublime-workspace
 *.swp
 *.swo
+*~
+*.bak
+
+
+# ==========================================
+# 7. Hệ Điều Hành (OS Junk - Windows / macOS / Linux)
+# ==========================================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Accidental stray folders / sub-repos
+optimize_services.bat/
+hooks/
+
+
+# ==========================================
+# 8. Log & File Tạm Chung (Logs & Temporaries)
+# ==========================================
+*.log
+logs/
+*.tmp
+*.temp
+scratch/

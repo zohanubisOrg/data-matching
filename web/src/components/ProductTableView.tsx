@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Copy, Check, ExternalLink, AlertCircle, ShoppingBag, Eye } from "lucide-react";
+import { Copy, Check, ExternalLink, AlertCircle, ShoppingBag, Eye, Apple, Building2 } from "lucide-react";
 import { ProductItem } from "@/types/product";
 
 interface ProductTableViewProps {
@@ -22,22 +22,22 @@ export function ProductTableView({ products, onSelect }: ProductTableViewProps) 
   };
 
   return (
-    <div className="glass-panel rounded-2xl overflow-hidden border border-slate-800">
+    <div className="glass-panel rounded-2xl overflow-hidden border border-slate-800 shadow-xl">
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
-          <thead className="bg-slate-950/80 text-slate-400 font-semibold uppercase tracking-wider border-b border-slate-800 text-[11px]">
+          <thead className="bg-slate-950 text-slate-400 font-semibold uppercase tracking-wider border-b border-slate-800 text-[11px]">
             <tr>
-              <th className="py-3 px-4 w-12 text-center">#</th>
-              <th className="py-3 px-4 w-20">Ảnh mặt trước</th>
-              <th className="py-3 px-4 min-w-[140px]">Barcode</th>
-              <th className="py-3 px-4 min-w-[120px]">Thương hiệu</th>
-              <th className="py-3 px-4 min-w-[200px]">Tên sản phẩm</th>
-              <th className="py-3 px-4 min-w-[90px]">Khối lượng</th>
-              <th className="py-3 px-4 min-w-[110px]">Variant</th>
-              <th className="py-3 px-4 min-w-[100px]">POS SKU</th>
-              <th className="py-3 px-4 min-w-[150px]">Tên khớp POS</th>
-              <th className="py-3 px-4 min-w-[110px] text-center">Trạng thái</th>
-              <th className="py-3 px-4 w-16 text-center">Xem</th>
+              <th className="py-3 px-3 w-12 text-center">ID</th>
+              <th className="py-3 px-3 w-16 text-center">Ảnh</th>
+              <th className="py-3 px-4 min-w-[130px]">Barcode</th>
+              <th className="py-3 px-3 min-w-[100px]">Brand</th>
+              <th className="py-3 px-4 min-w-[220px]">Tên đầy đủ (EN / DA)</th>
+              <th className="py-3 px-3 min-w-[80px]">Khối lượng</th>
+              <th className="py-3 px-3 min-w-[80px]">Kcal / 100g</th>
+              <th className="py-3 px-3 min-w-[110px]">Xuất xứ / Importer</th>
+              <th className="py-3 px-3 min-w-[90px]">POS SKU</th>
+              <th className="py-3 px-3 min-w-[90px] text-center">Trạng thái</th>
+              <th className="py-3 px-3 w-16 text-center">Chi tiết</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60 text-slate-200">
@@ -47,17 +47,17 @@ export function ProductTableView({ products, onSelect }: ProductTableViewProps) 
 
               return (
                 <tr
-                  key={p.original_image}
+                  key={p.record_id || p.barcode || idx}
                   onClick={() => onSelect(p)}
                   className="hover:bg-slate-800/40 cursor-pointer transition-colors group"
                 >
-                  <td className="py-2.5 px-4 text-center font-mono text-slate-500 text-[11px]">
-                    {idx + 1}
+                  <td className="py-2.5 px-3 text-center font-mono text-cyan-400/90 font-bold text-[11px]">
+                    {p.record_id || `G1-${String(idx + 1).padStart(4, "0")}`}
                   </td>
 
                   {/* Thumbnail */}
-                  <td className="py-2.5 px-4">
-                    <div className="w-12 h-12 bg-slate-950 rounded-lg p-1 border border-slate-800 flex items-center justify-center overflow-hidden">
+                  <td className="py-2.5 px-3 text-center">
+                    <div className="w-12 h-12 bg-slate-950 rounded-lg p-1 border border-slate-800 flex items-center justify-center overflow-hidden mx-auto">
                       {p.front_web_url ? (
                         <img
                           src={p.front_web_url}
@@ -89,63 +89,82 @@ export function ProductTableView({ products, onSelect }: ProductTableViewProps) 
                         </button>
                       )}
                     </div>
-                    <div className="text-[10px] text-slate-500 truncate max-w-[130px]">
-                      {p.detection_method}
+                    <div className="text-[10px] text-emerald-400/80 truncate max-w-[130px]">
+                      {p.barcode_check_status || "GS1 Verified"}
                     </div>
                   </td>
 
                   {/* Brand */}
-                  <td className="py-2.5 px-4 font-semibold text-slate-300">
+                  <td className="py-2.5 px-3 font-semibold text-slate-300">
                     {p.brand || "---"}
                   </td>
 
-                  {/* Product Name */}
+                  {/* Product Names (EN & DA) */}
                   <td className="py-2.5 px-4">
-                    <div className="font-medium text-white group-hover:text-cyan-200 transition-colors line-clamp-2">
-                      {p.product_name || "Chưa rõ tên sản phẩm"}
+                    <div className="font-semibold text-white line-clamp-1 group-hover:text-cyan-300 transition-colors">
+                      {p.full_name_en || p.product_name}
                     </div>
-                    <div className="text-[10px] text-slate-500 font-mono">
-                      {p.original_image}
-                    </div>
+                    {p.fuldt_navn_da && (
+                      <div className="text-[11px] text-slate-400 italic line-clamp-1 mt-0.5">
+                        <span className="text-[10px] text-blue-400 font-semibold mr-1">DA:</span>
+                        {p.fuldt_navn_da}
+                      </div>
+                    )}
                   </td>
 
                   {/* Net Weight */}
-                  <td className="py-2.5 px-4 text-slate-300">
-                    {p.net_weight || "---"}
+                  <td className="py-2.5 px-3 text-slate-300 font-medium">
+                    {p.net_quantity ? `${p.net_quantity} ${p.net_unit || "g"}` : p.net_weight || "---"}
                   </td>
 
-                  {/* Variant */}
-                  <td className="py-2.5 px-4 text-slate-400 truncate max-w-[110px]">
-                    {p.variant || "---"}
+                  {/* Kcal */}
+                  <td className="py-2.5 px-3 font-mono text-amber-300/90 font-semibold">
+                    {p.energy_kcal !== null && p.energy_kcal !== undefined ? `${p.energy_kcal}` : "---"}
+                  </td>
+
+                  {/* Origin & Importer */}
+                  <td className="py-2.5 px-3 text-slate-300">
+                    <div className="font-medium text-slate-200">{p.country_of_origin || "---"}</div>
+                    {p.importer && (
+                      <div className="text-[10px] text-slate-400 truncate max-w-[120px]">{p.importer}</div>
+                    )}
                   </td>
 
                   {/* POS SKU */}
-                  <td className="py-2.5 px-4 font-mono font-semibold text-emerald-400">
-                    {p.pos_sku || "---"}
-                  </td>
-
-                  {/* POS Product Name */}
-                  <td className="py-2.5 px-4 text-slate-400 truncate max-w-[150px]">
-                    {p.pos_product_name || "---"}
+                  <td className="py-2.5 px-3">
+                    {hasPos ? (
+                      <span className="font-mono font-bold text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-500/30">
+                        {p.pos_sku}
+                      </span>
+                    ) : (
+                      <span className="text-slate-500 text-[11px]">Chưa gán</span>
+                    )}
                   </td>
 
                   {/* Status */}
-                  <td className="py-2.5 px-4 text-center">
+                  <td className="py-2.5 px-3 text-center">
                     <span
-                      className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                      className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
                         isConfirmed
-                          ? "bg-emerald-950/80 text-emerald-300 border-emerald-500/30"
-                          : "bg-amber-950/80 text-amber-300 border-amber-500/30"
+                          ? "bg-emerald-950 text-emerald-300 border-emerald-500/40"
+                          : "bg-amber-950 text-amber-300 border-amber-500/40"
                       }`}
                     >
-                      {isConfirmed ? "Confirmed" : "Review"}
+                      {isConfirmed ? "FIC OK" : "Cần duyệt"}
                     </span>
                   </td>
 
-                  {/* Action */}
-                  <td className="py-2.5 px-4 text-center">
-                    <button className="p-1 text-slate-400 hover:text-cyan-400 transition-colors">
-                      <Eye className="w-4 h-4" />
+                  {/* Action View */}
+                  <td className="py-2.5 px-3 text-center">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelect(p);
+                      }}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/60 transition"
+                      title="Soi chi tiết"
+                    >
+                      <Eye className="w-4 h-4 text-cyan-400" />
                     </button>
                   </td>
                 </tr>

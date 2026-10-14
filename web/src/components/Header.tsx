@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { CheckCircle2, AlertCircle, ShoppingBag, Layers, Download, Sparkles } from "lucide-react";
+import { CheckCircle2, AlertCircle, ShoppingBag, Layers, Download, Sparkles, FileSpreadsheet } from "lucide-react";
 import { CatalogStats } from "@/types/product";
 
 interface HeaderProps {
@@ -22,20 +22,28 @@ export function Header({ stats }: HeaderProps) {
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2">
                 G1 Delivery <span className="text-cyan-400 font-mono text-lg">Visual Portal</span>
               </h1>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
-                Vercel Ready
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                65 Columns (EU FIC 1169/2011)
               </span>
             </div>
             <p className="text-xs sm:text-sm text-slate-400 mt-1">
-              Báo cáo đối soát Barcode & Ảnh mặt trước bao bì tách chuẩn 100% cho Website
+              Báo cáo đối soát Barcode, Nutrition facts & Ảnh mặt trước chuẩn hóa e-commerce cho Website / Vercel
             </p>
           </div>
 
           {/* Quick Action buttons */}
           <div className="flex items-center gap-3">
             <a
+              href="/data/G1_Master_Delivery_65_Columns.xlsx"
+              download="G1_Master_Delivery_65_Columns.xlsx"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-emerald-300 bg-emerald-950/60 border border-emerald-500/40 hover:bg-emerald-900/60 hover:text-white transition-colors"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+              Tải Excel (65 Cột)
+            </a>
+            <a
               href="/data/products.json"
-              download="G1_products.json"
+              download="G1_products_65_fields.json"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 bg-slate-900 border border-slate-700/80 hover:border-cyan-500/60 hover:text-white transition-colors"
             >
               <Download className="w-3.5 h-3.5 text-cyan-400" />

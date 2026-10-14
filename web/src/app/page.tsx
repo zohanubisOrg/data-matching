@@ -18,6 +18,8 @@ export default function CatalogPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [brandFilter, setBrandFilter] = useState("");
+  const [categoryLevel1Filter, setCategoryLevel1Filter] = useState("");
+  const [categoryLevel2Filter, setCategoryLevel2Filter] = useState("");
   const [sortBy, setSortBy] = useState("default");
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
 
@@ -59,6 +61,16 @@ export default function CatalogPage() {
       list = list.filter((p) => p.brand === brandFilter);
     }
 
+    // Category Level 1 filter
+    if (categoryLevel1Filter) {
+      list = list.filter((p) => p.category_level_1 === categoryLevel1Filter);
+    }
+
+    // Category Level 2 filter
+    if (categoryLevel2Filter) {
+      list = list.filter((p) => p.category_level_2 === categoryLevel2Filter);
+    }
+
     // Search query
     if (search.trim()) {
       const q = search.toLowerCase().trim();
@@ -83,7 +95,7 @@ export default function CatalogPage() {
     }
 
     return list;
-  }, [data, search, statusFilter, brandFilter, sortBy]);
+  }, [data, search, statusFilter, brandFilter, categoryLevel1Filter, categoryLevel2Filter, sortBy]);
 
   // Modal navigation index
   const currentIndex = useMemo(() => {
@@ -137,6 +149,19 @@ export default function CatalogPage() {
               onStatusFilterChange={setStatusFilter}
               brandFilter={brandFilter}
               onBrandFilterChange={setBrandFilter}
+              categoryLevel1Filter={categoryLevel1Filter}
+              onCategoryLevel1FilterChange={(cat) => {
+                setCategoryLevel1Filter(cat);
+                setCategoryLevel2Filter("");
+              }}
+              categoryLevel2Filter={categoryLevel2Filter}
+              onCategoryLevel2FilterChange={setCategoryLevel2Filter}
+              categoriesLevel1={data.categories_level_1 || []}
+              categoriesLevel2={
+                categoryLevel1Filter
+                  ? Array.from(new Set(data.products.filter(p => p.category_level_1 === categoryLevel1Filter).map(p => p.category_level_2).filter(Boolean) as string[])).sort()
+                  : (data.categories_level_2 || [])
+              }
               sortBy={sortBy}
               onSortChange={setSortBy}
               viewMode={viewMode}

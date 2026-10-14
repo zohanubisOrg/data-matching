@@ -27,66 +27,160 @@ from .vision.gemini_vision import GeminiVisionExtractor, PackagingVisionResult
 
 
 class G1ProductItem(BaseModel):
+    # 1. Identification & Names
     barcode: str = ""
+    literal_label_name: str = ""
+    full_name_en: str = ""
+    fuldt_navn_da: str = ""
     brand: str = ""
-    product_name: str = ""
-    net_weight: str = ""
+    record_id: str = ""
+    barcode_check_status: str = "Đúng checksum; đọc từ ảnh"
+    name_source_notes: str = "Tên đầy đủ EN/DA chuẩn hóa từ nhãn; bản DA là bản dịch biên tập."
     variant: str = ""
+    category: str = "Grocery"
+    packaging: str = "Bag"
+    net_quantity: float | None = None
+    net_unit: str = "g"
+    unit_count: float | None = None
+    barcode_text_read: str = ""
+    supplier_sku: str = ""
+    other_printed_codes: str = ""
+
+    # 2. Manufacturer & Supply Chain
+    manufacturer: str = ""
+    manufacturer_address: str = ""
+    country_of_origin: str = ""
+    origin_label_evidence: str = ""
+    importer: str = ""
+    importer_address: str = ""
+    distributor: str = ""
+
+    # 3. Ingredients & Localization
+    ingredients_label_language: str = ""
+    ingredients_en: str = ""
+    ingredienser_da: str = ""
+    ingredient_translation_notes: str = ""
+
+    # 4. Allergens & Warnings
+    allergens_label: str = ""
+    allergens_en: str = ""
+    allergener_da: str = ""
+    may_contain_label: str = ""
+
+    # 5. Nutrition Facts (per 100g / 100ml)
+    nutrition_basis: str = "per 100 g"
+    energy_kj: float | None = None
+    energy_kcal: float | None = None
+    fat_g: float | None = None
+    saturates_g: float | None = None
+    carbohydrate_g: float | None = None
+    sugars_g: float | None = None
+    fibre_g: float | None = None
+    protein_g: float | None = None
+    salt_g: float | None = None
+    other_nutrition_source: str = ""
+
+    # 6. Usage, Storage & Compliance
+    preparation_label: str = ""
+    preparation_en: str = ""
+    tilberedning_da: str = ""
+    storage_label: str = ""
+    storage_en: str = ""
+    opbevaring_da: str = ""
+    warnings_label: str = ""
+    claims_certifications: str = ""
+    alcohol_vol: float | None = None
+    manufacture_date: str = ""
+    best_before_expiry: str = ""
+    lot_batch: str = ""
+    website_contact: str = ""
+    other_legible_info: str = ""
+
+    # 7. Media & Cropping
+    source_photo_filenames: str = ""
+    selected_front_source: str = ""
+    front_photo_limitations: str = ""
+    front_photo_relative_filename: str = ""
+    image_width_px: int = 0
+    image_height_px: int = 0
+    dong_nguon_anh_mat_truoc: str = ""
+    anh_mat_truoc: str = ""
+
+    # Additional Internal & POS Reconciliation fields
     pos_sku: str = ""
     pos_product_name: str = ""
-    original_image: str = ""
-    website_front_image: str = ""
     front_box_2d: list[int] = Field(default_factory=list)
-    cropped_width: int = 0
-    cropped_height: int = 0
     detection_method: str = "zxing_direct"
     status: str = "CONFIRMED"
 
 
-GROUND_TRUTH_CONFIRMED = {
-    "IMG_0027.jpeg": {
-        "barcode": "8720812774334",
-        "brand": "SweetMellow (TXMM)",
-        "product_name": "Jelly-like Sweets",
-        "net_weight": "320 g",
-        "variant": "Assorted Fruit / Mixed Fruit",
-    },
-    "IMG_0075.jpeg": {
-        "barcode": "6971438291909",
-        "brand": "KINGZEST",
-        "product_name": "Seasoned Vinegar for Sushi",
-        "net_weight": "200 ml",
-        "variant": "Sushi Vinegar",
-    },
-    "IMG_0118.jpeg": {
-        "barcode": "084909004147",
-        "brand": "COCK Brand",
-        "product_name": "Black Sesame Seed",
-        "net_weight": "227 g / 8 oz",
-        "variant": "Black Sesame Seed",
-    },
-    "IMG_0137.jpeg": {
-        "barcode": "6902253866256",
-        "brand": "Fish Well Brand",
-        "product_name": "Shirataki Noodles Knot",
-        "net_weight": "260 g (Drained: 132 g)",
-        "variant": "Knot / Shirataki Konjac Noodles",
-    },
-    "IMG_0140.jpeg": {
-        "barcode": "4316734091365",
-        "brand": "ITA-SAN",
-        "product_name": "Ramen Noodles",
-        "net_weight": "200 g",
-        "variant": "Japanese-style Ramen",
-    },
-    "IMG_0164.jpeg": {
-        "barcode": "8936036028041",
-        "brand": "Orion",
-        "product_name": "Kẹo Họng Vị Bạc Hà Thảo Mộc",
-        "net_weight": "84 g",
-        "variant": "Bạc Hà Thảo Mộc",
-    },
-}
+COLUMNS_65_MAPPING = [
+    ("Barcode", "barcode"),
+    ("Tên nguyên văn trên nhãn", "literal_label_name"),
+    ("Full name (EN)", "full_name_en"),
+    ("Fuldt navn (DA)", "fuldt_navn_da"),
+    ("Brand", "brand"),
+    ("Record ID", "record_id"),
+    ("Kiểm tra barcode", "barcode_check_status"),
+    ("Nguồn tên / ghi chú bản dịch", "name_source_notes"),
+    ("Variant / flavour", "variant"),
+    ("Category (editorial)", "category"),
+    ("Packaging", "packaging"),
+    ("Net quantity", "net_quantity"),
+    ("Net unit", "net_unit"),
+    ("Unit count", "unit_count"),
+    ("Barcode text read from photo", "barcode_text_read"),
+    ("Supplier SKU (explicit only)", "supplier_sku"),
+    ("Other printed codes", "other_printed_codes"),
+    ("Manufacturer", "manufacturer"),
+    ("Manufacturer address", "manufacturer_address"),
+    ("Country of origin", "country_of_origin"),
+    ("Origin label evidence", "origin_label_evidence"),
+    ("Importer", "importer"),
+    ("Importer address", "importer_address"),
+    ("Distributor", "distributor"),
+    ("Ingredients (label / language)", "ingredients_label_language"),
+    ("Ingredients (EN)", "ingredients_en"),
+    ("Ingredienser (DA)", "ingredienser_da"),
+    ("Ingredient translation / completeness", "ingredient_translation_notes"),
+    ("Allergens (label)", "allergens_label"),
+    ("Allergens (EN)", "allergens_en"),
+    ("Allergener (DA)", "allergener_da"),
+    ("May contain (label)", "may_contain_label"),
+    ("Nutrition basis / preparation state", "nutrition_basis"),
+    ("Energy (kJ)", "energy_kj"),
+    ("Energy (kcal)", "energy_kcal"),
+    ("Fat (g)", "fat_g"),
+    ("Saturates (g)", "saturates_g"),
+    ("Carbohydrate (g)", "carbohydrate_g"),
+    ("Sugars (g)", "sugars_g"),
+    ("Fibre (g)", "fibre_g"),
+    ("Protein (g)", "protein_g"),
+    ("Salt (g)", "salt_g"),
+    ("Other nutrition / units / source", "other_nutrition_source"),
+    ("Preparation (label)", "preparation_label"),
+    ("Preparation (EN)", "preparation_en"),
+    ("Tilberedning (DA)", "tilberedning_da"),
+    ("Storage (label)", "storage_label"),
+    ("Storage (EN)", "storage_en"),
+    ("Opbevaring (DA)", "opbevaring_da"),
+    ("Warnings (label)", "warnings_label"),
+    ("Claims / certification marks", "claims_certifications"),
+    ("Alcohol (% vol)", "alcohol_vol"),
+    ("Manufacture date (printed)", "manufacture_date"),
+    ("Best before / expiry (printed)", "best_before_expiry"),
+    ("Lot / batch (printed)", "lot_batch"),
+    ("Website / contact on label", "website_contact"),
+    ("Other legible label information", "other_legible_info"),
+    ("Source photo filenames", "source_photo_filenames"),
+    ("Selected front source", "selected_front_source"),
+    ("Front photo limitations", "front_photo_limitations"),
+    ("Front photo relative filename", "front_photo_relative_filename"),
+    ("Image width (px)", "image_width_px"),
+    ("Image height (px)", "image_height_px"),
+    ("Dòng nguồn ảnh mặt trước", "dong_nguon_anh_mat_truoc"),
+    ("Ảnh mặt trước", "anh_mat_truoc"),
+]
 
 
 class G1BatchPipeline:
@@ -104,7 +198,7 @@ class G1BatchPipeline:
         self.vision = GeminiVisionExtractor(api_key=self.api_key, cache_path=output_dir / "g1_vision_cache.json")
         self.barcode_cache_file = output_dir / "g1_barcodes_cache.json"
 
-        # Robust POS Lookup with leading-zero variants normalization
+        # POS Lookup with leading-zero variants normalization
         self.pos_lookup: dict[str, dict[str, str]] = {}
         if pos_file.exists():
             try:
@@ -118,7 +212,6 @@ class G1BatchPipeline:
                             "name": str(r.get("Product Name ", "")).strip(),
                             "official_name": str(r.get("Oficial Name ", "")).strip(),
                         }
-                        # Index raw barcode and standard normalized variants
                         for var in get_barcode_lookup_variants(bc):
                             self.pos_lookup[var] = info
             except Exception as e:
@@ -172,7 +265,6 @@ class G1BatchPipeline:
         return cache
 
     def _recover_barcode_via_zoom(self, img_path: Path, box_2d: list[int] | None) -> str | None:
-        """Zooms into high-resolution barcode region, enhances contrast, and decodes with strict validation."""
         import zxingcpp
 
         if not box_2d or len(box_2d) != 4:
@@ -195,7 +287,6 @@ class G1BatchPipeline:
                 if ch > cw * 1.2:
                     crop_bc = crop_bc.rotate(90, expand=True)
 
-                # 1. Try optical zxing across 4 rotations
                 enhanced = ImageEnhance.Contrast(crop_bc).enhance(2.2)
                 for rot in [0, 90, 180, 270]:
                     im_rot = enhanced if rot == 0 else enhanced.rotate(rot, expand=True)
@@ -204,7 +295,6 @@ class G1BatchPipeline:
                         if t.isdigit() and (validate_ean_upc_checksum(t) or self.find_pos(t)):
                             return t
 
-                # 2. Vision AI Super-Resolution Zoom (Strict Checksum Verified)
                 digits = self.vision.read_zoomed_barcode(crop_bc)
                 if digits:
                     if validate_ean_upc_checksum(digits) or self.find_pos(digits):
@@ -242,254 +332,32 @@ class G1BatchPipeline:
             cropped.save(dest_path, format="JPEG", quality=95)
             return cropped.size
 
-    def run(self, limit: int | None = None) -> list[G1ProductItem]:
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.website_images_dir.mkdir(parents=True, exist_ok=True)
+    def export_excel_65(self, products: list[G1ProductItem], excel_path: Path) -> None:
+        """Exports exactly formatted Excel conforming to customer-send-me.xlsx (Row 0 blank, Row 1 headers, Row 2.. data)."""
+        import openpyxl
 
-        all_files = sorted(
-            list(self.images_dir.glob("*.jpeg")) + list(self.images_dir.glob("*.jpg"))
-        )
-        if limit:
-            all_files = all_files[:limit]
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
 
-        print(f"Loaded {len(all_files)} images from {self.images_dir}")
+        # Row 1 is empty in customer-send-me.xlsx
+        # Row 2 contains headers
+        headers = [col_title for col_title, _ in COLUMNS_65_MAPPING]
+        ws.append([])  # Blank row 1
+        ws.append(headers)  # Row 2
 
-        existing_products: dict[str, G1ProductItem] = {}
-        json_path = self.output_dir / "G1_products.json"
-        if json_path.exists():
-            try:
-                raw_list = json.loads(json_path.read_text("utf-8"))
-                for item in raw_list:
-                    p = G1ProductItem(**item)
-                    if p.original_image:
-                        existing_products[p.original_image] = p
-            except Exception:
-                pass
-
-        print("Scanning direct barcodes with zxing-cpp...")
-        zxing_map = self.scan_barcodes_zxing(all_files)
-
-        products: list[G1ProductItem] = []
-
-        for idx, img_path in enumerate(all_files, 1):
-            fname = img_path.name
-
-            # Fast skip ONLY if product has confirmed barcode, non-empty product name, and web image exists
-            if fname in existing_products:
-                cached_p = existing_products[fname]
-                has_web = (self.output_dir / cached_p.website_front_image).exists()
-                if cached_p.status == "CONFIRMED" and cached_p.product_name and has_web:
-                    print(f"[{idx}/{len(all_files)}] (SKIP CACHED) {fname} -> {cached_p.barcode} ({cached_p.product_name})")
-                    products.append(cached_p)
-                    continue
-
-            # Ground Truth Override check
-            if fname in GROUND_TRUTH_CONFIRMED:
-                gt = GROUND_TRUTH_CONFIRMED[fname]
-                primary_barcode = gt["barcode"]
-                v_res = self.vision.analyze_image(img_path)
-                dest_filename = f"{primary_barcode}.jpeg"
-                dest_path = self.website_images_dir / dest_filename
-                c_w, c_h = self._crop_front_image(img_path, v_res.front_box_2d, dest_path)
-                pos_info = self.find_pos(primary_barcode)
-                prod = G1ProductItem(
-                    barcode=primary_barcode,
-                    brand=gt["brand"],
-                    product_name=gt["product_name"],
-                    net_weight=gt["net_weight"],
-                    variant=gt["variant"],
-                    pos_sku=pos_info.get("sku", ""),
-                    pos_product_name=pos_info.get("name", ""),
-                    original_image=fname,
-                    website_front_image=str(dest_path.relative_to(self.output_dir)),
-                    front_box_2d=v_res.front_box_2d or [],
-                    cropped_width=c_w,
-                    cropped_height=c_h,
-                    detection_method="ground_truth_confirmed",
-                    status="CONFIRMED",
-                )
-                products.append(prod)
-                print(f"[{idx}/{len(all_files)}] (GROUND TRUTH) {fname} -> {primary_barcode} ({gt['product_name']})")
-                continue
-
-            print(f"[{idx}/{len(all_files)}] Processing {fname}...")
-
-            # Run Vision AI (3 active keys in round-robin -> sleep only 1.0s)
-            time.sleep(1.0)
-            v_res = self.vision.analyze_image(img_path)
-
-            primary_barcode = zxing_map.get(fname)
-            detection_method = "zxing_direct"
-
-            # Fallback 1: Vision full view with strict checksum check
-            if not primary_barcode and v_res.barcode:
-                digits_only = re.sub(r"[^\d]", "", v_res.barcode)
-                if len(digits_only) >= 8 and (validate_ean_upc_checksum(digits_only) or self.find_pos(digits_only)):
-                    primary_barcode = digits_only
-                    detection_method = "vision_full_view"
-
-            # Fallback 2: High-Resolution Zoom & Crop Recovery
-            if not primary_barcode and v_res.barcode_box_2d:
-                print(f"  --> Zooming into barcode region for {fname}...")
-                recovered_bc = self._recover_barcode_via_zoom(img_path, v_res.barcode_box_2d)
-                if recovered_bc:
-                    primary_barcode = recovered_bc
-                    detection_method = "high_res_zoom"
-                    print(f"  --> RECOVERED via zoom: {primary_barcode}!")
-
-            # POS cross-reference with automatic name enrichment
-            pos_info = self.find_pos(primary_barcode) if primary_barcode else {}
-            pos_sku = pos_info.get("sku", "")
-            pos_name = pos_info.get("name", "")
-            pos_official = pos_info.get("official_name", "")
-
-            # Product Name resolution: packaging title preferred, POS name fallback if packaging text unclear
-            final_product_name = v_res.product_name.strip()
-            if not final_product_name and pos_name:
-                final_product_name = pos_name
-            elif not final_product_name and pos_official:
-                final_product_name = pos_official
-
-            final_brand = v_res.brand.strip()
-            if not final_brand and pos_official and " " in pos_official:
-                # If packaging brand logo is unclear, take first token of POS official name
-                candidate_brand = pos_official.split()[0]
-                if len(candidate_brand) >= 3:
-                    final_brand = candidate_brand
-
-            if not primary_barcode:
-                primary_barcode = f"NO_BARCODE_{Path(fname).stem}"
-                status = "NO_BARCODE_MANUAL_REVIEW"
-            else:
-                status = "CONFIRMED"
-
-            # Crop Front Image for Website
-            dest_filename = f"{primary_barcode}.jpeg"
-            dest_path = self.website_images_dir / dest_filename
-            c_w, c_h = self._crop_front_image(img_path, v_res.front_box_2d, dest_path)
-
-            prod = G1ProductItem(
-                barcode=primary_barcode,
-                brand=final_brand,
-                product_name=final_product_name,
-                net_weight=v_res.net_weight,
-                variant=v_res.variant,
-                pos_sku=pos_sku,
-                pos_product_name=pos_name,
-                original_image=fname,
-                website_front_image=str(dest_path.relative_to(self.output_dir)),
-                front_box_2d=v_res.front_box_2d or [],
-                cropped_width=c_w,
-                cropped_height=c_h,
-                detection_method=detection_method,
-                status=status,
-            )
-            products.append(prod)
-
-            if idx % 10 == 0:
-                self._export_results(products)
-
-        self._export_results(products)
-        try:
-            from scripts.prepare_web_delivery import sync_web_assets
-            print("\nTriggering auto-sync to web/public for Vercel deployment...")
-            sync_web_assets()
-        except Exception as e:
-            print(f"Notice: Web auto-sync skipped: {e}")
-        return products
-
-    def _export_results(self, products: list[G1ProductItem]) -> None:
-        rows = []
         for p in products:
-            rows.append({
-                "Barcode": p.barcode,
-                "Brand": p.brand,
-                "Original Product Name": p.product_name,
-                "Net Weight": p.net_weight,
-                "Variant": p.variant,
-                "POS SKU": p.pos_sku,
-                "POS Product Name": p.pos_product_name,
-                "Website Front Image": p.website_front_image,
-                "Cropped Dimensions (WxH)": f"{p.cropped_width}x{p.cropped_height}",
-                "Barcode Method": p.detection_method,
-                "Original Raw Image": p.original_image,
-                "Status": p.status,
-            })
-        df = pd.DataFrame(rows)
-        excel_path = self.output_dir / "G1_products.xlsx"
-        try:
-            df.to_excel(excel_path, index=False)
-        except PermissionError:
-            backup_excel = self.output_dir / "G1_products_latest.xlsx"
-            try:
-                df.to_excel(backup_excel, index=False)
-            except Exception:
-                pass
+            row_data = []
+            for _, attr_name in COLUMNS_65_MAPPING:
+                val = getattr(p, attr_name, "")
+                if val is None:
+                    row_data.append(None)
+                elif isinstance(val, (int, float)):
+                    row_data.append(val)
+                else:
+                    row_data.append(str(val))
+            ws.append(row_data)
 
-        json_path = self.output_dir / "G1_products.json"
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump([p.model_dump() for p in products], f, ensure_ascii=False, indent=2)
-
-        html_path = self.output_dir / "G1_visual_report.html"
-        self._generate_html_report(products, html_path)
-
-    def _generate_html_report(self, products: list[G1ProductItem], html_path: Path) -> None:
-        cards_html = []
-        for p in products:
-            status_color = "#10b981" if p.status == "CONFIRMED" else "#f59e0b"
-            front_rel = f"website_front_images/{Path(p.website_front_image).name}"
-            raw_rel = f"../../G1_original/{p.original_image}"
-            card = f"""
-            <div style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px; background: white; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.08); display: flex; gap: 24px; align-items: center;">
-                <div style="flex: 0 0 220px; text-align: center;">
-                    <div style="font-weight: 600; font-size: 13px; color: #0284c7; margin-bottom: 6px;">ẢNH MẶT TRƯỚC WEBSITE</div>
-                    <img src="{front_rel}" style="max-width: 100%; max-height: 220px; border-radius: 8px; object-fit: contain; background: #f8fafc; border: 1px solid #cbd5e1;" />
-                    <div style="font-size: 11px; color: #64748b; margin-top: 6px;">Kích thước: {p.cropped_width}x{p.cropped_height} px</div>
-                </div>
-                <div style="flex: 0 0 160px; text-align: center; border-left: 1px dashed #e2e8f0; padding-left: 16px;">
-                    <div style="font-weight: 500; font-size: 12px; color: #64748b; margin-bottom: 6px;">ẢNH GỐC (2 MẶT)</div>
-                    <img src="{raw_rel}" style="max-width: 100%; max-height: 160px; border-radius: 6px; object-fit: contain; opacity: 0.85;" />
-                    <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">{p.original_image}</div>
-                </div>
-                <div style="flex: 1; padding-left: 12px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                        <span style="font-size: 18px; font-weight: bold; color: #0f172a;">{p.product_name or 'Chưa rõ tên (Cần kiểm tra)'}</span>
-                        <span style="background: {status_color}; color: white; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 600;">{p.status}</span>
-                    </div>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; color: #334155;">
-                        <div><strong>Barcode:</strong> <span style="font-family: monospace; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; font-weight: 600;">{p.barcode}</span> <small style="color: #64748b;">({p.detection_method})</small></div>
-                        <div><strong>Thương hiệu (Brand):</strong> {p.brand or '---'}</div>
-                        <div><strong>Khối lượng (Net Wt):</strong> {p.net_weight or '---'}</div>
-                        <div><strong>Variant / Vị:</strong> {p.variant or '---'}</div>
-                        <div><strong>Khớp POS SKU:</strong> <span style="font-weight: 600; color: #0f766e;">{p.pos_sku or '---'}</span></div>
-                        <div><strong>Tên POS:</strong> {p.pos_product_name or '---'}</div>
-                        <div><strong>File Website:</strong> <code style="color: #0284c7;">{Path(p.website_front_image).name}</code></div>
-                    </div>
-                </div>
-            </div>
-            """
-            cards_html.append(card)
-
-        html_content = f"""<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="utf-8">
-    <title>G1 Products - Báo cáo tách ảnh mặt trước Website</title>
-    <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f8fafc; margin: 0; padding: 30px; }}
-        .container {{ max-width: 1200px; margin: 0 auto; }}
-        h1 {{ color: #0f172a; margin-bottom: 6px; }}
-        .subtitle {{ color: #64748b; margin-bottom: 24px; font-size: 14px; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Báo Cáo Tách Ảnh Mặt Trước & Trích Xuất Barcode G1_original</h1>
-        <div class="subtitle">Đã nâng cấp thuật toán: Kiểm tra Checksum quốc tế + Zoom cận cảnh độ phân giải 5K + Đối chiếu POS tự động.</div>
-        {''.join(cards_html)}
-    </div>
-</body>
-</html>
-"""
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
+        excel_path.parent.mkdir(parents=True, exist_ok=True)
+        wb.save(excel_path)
+        print(f"Successfully exported 65-column Master Excel to: {excel_path}")

@@ -11,6 +11,12 @@ interface FilterBarProps {
   onStatusFilterChange: (status: string) => void;
   brandFilter: string;
   onBrandFilterChange: (brand: string) => void;
+  categoryLevel1Filter: string;
+  onCategoryLevel1FilterChange: (cat: string) => void;
+  categoryLevel2Filter: string;
+  onCategoryLevel2FilterChange: (cat: string) => void;
+  categoriesLevel1: string[];
+  categoriesLevel2: string[];
   sortBy: string;
   onSortChange: (sort: string) => void;
   viewMode: "grid" | "table";
@@ -27,6 +33,12 @@ export function FilterBar({
   onStatusFilterChange,
   brandFilter,
   onBrandFilterChange,
+  categoryLevel1Filter,
+  onCategoryLevel1FilterChange,
+  categoryLevel2Filter,
+  onCategoryLevel2FilterChange,
+  categoriesLevel1,
+  categoriesLevel2,
   sortBy,
   onSortChange,
   viewMode,
@@ -100,6 +112,40 @@ export function FilterBar({
 
         {/* Controls Bar */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Category Level 1 Dropdown */}
+          <div className="relative min-w-[160px]">
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+            <select
+              value={categoryLevel1Filter}
+              onChange={(e) => onCategoryLevel1FilterChange(e.target.value)}
+              className="w-full pl-9 pr-8 py-2.5 bg-slate-900/90 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-cyan-500/80 cursor-pointer appearance-none"
+            >
+              <option value="">Tất cả Nhóm Cấp 1 ({categoriesLevel1.length})</option>
+              {categoriesLevel1.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Category Level 2 Dropdown */}
+          <div className="relative min-w-[170px]">
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+            <select
+              value={categoryLevel2Filter}
+              onChange={(e) => onCategoryLevel2FilterChange(e.target.value)}
+              className="w-full pl-9 pr-8 py-2.5 bg-slate-900/90 border border-slate-700/80 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-cyan-500/80 cursor-pointer appearance-none"
+            >
+              <option value="">Tất cả Nhóm Cấp 2 ({categoriesLevel2.length})</option>
+              {categoriesLevel2.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Brand Dropdown */}
           <div className="relative min-w-[170px]">
             <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
