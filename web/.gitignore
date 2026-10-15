@@ -20,6 +20,17 @@
 # production
 /build
 
+# product images
+/public/products/*
+!/public/products/.gitkeep
+!/public/products/*/
+/public/products/*/*
+!/public/products/*/.gitkeep
+/public/products/**/*.webp
+/public/products/**/*.png
+/public/products/**/*.jpg
+/public/products/**/*.jpeg
+
 # misc
 .DS_Store
 *.pem

@@ -10,6 +10,10 @@ class UnverifiedPackageError(ValueError):
     """Input needs source/identity/boundary review before rendering."""
 
 
+class InsufficientNativeResolutionError(UnverifiedPackageError):
+    """The product ROI would need enlargement to fill the requested canvas."""
+
+
 def mask_from_polygon(size: tuple[int, int], points: list) -> np.ndarray:
     w, h = size
     pts = np.asarray(points, dtype=float)
@@ -46,7 +50,7 @@ def assess_candidate_mask(candidate, reference) -> dict:
             'qa_status': 'NEEDS_MANUAL_REVIEW'}
 
 
-def render_verified_packshot(image: Image.Image, mask, target_side=2400, shape='auto') -> tuple[Image.Image, dict]:
+def render_verified_packshot(image: Image.Image, mask, target_side=2400, shape='auto', *, fit_to_native=False) -> tuple[Image.Image, dict]:
     if mask is None:
         raise UnverifiedPackageError('Independent whole-package mask required; logo contour is insufficient')
     arr = np.asarray(image.convert('RGB'))
@@ -75,7 +79,22 @@ def render_verified_packshot(image: Image.Image, mask, target_side=2400, shape='
     occupancy = {'tall': .88, 'horizontal': .89, 'square': .84, 'irregular': .83}.get(shape)
     if occupancy is None:
         raise ValueError('Unknown product shape')
-    scale = target_side*occupancy/max(pw, ph)
+    requested_occupancy = occupancy
+    requested_scale = target_side*occupancy/max(pw, ph)
+    scale_limited_to_native = requested_scale > 1 and fit_to_native
+    if requested_scale > 1:
+        if not fit_to_native:
+            raise InsufficientNativeResolutionError(
+                f'Native package resolution insufficient; 2400-style rendering would require upscaling ({requested_scale:.3f}x)'
+            )
+        scale = 1.0
+        occupancy = max(pw, ph)/target_side
+        if occupancy < .75:
+            raise InsufficientNativeResolutionError(
+                f'Native package would occupy only {occupancy:.3f} of the canvas at native scale; another source is required'
+            )
+    else:
+        scale = requested_scale
     placed = (max(1, round(pw*scale)), max(1, round(ph*scale)))
     # Only feather 1.5 source pixels inward; all interior labels stay opaque.
     alpha = np.minimum(cv2.distanceTransform(m, cv2.DIST_L2, 5)/1.5, 1)[y0:y1, x0:x1, None]
@@ -87,6 +106,7 @@ def render_verified_packshot(image: Image.Image, mask, target_side=2400, shape='
     output.paste(crop, offset)
     return output, {'source_bbox': [x0,y0,x1,y1], 'native_package_size': [pw,ph],
                     'placed_size': list(placed), 'offset': list(offset), 'shape': shape,
-                    'occupancy': occupancy, 'upscale_factor': scale,
-                    'source_resolution_warning': scale > 1,
+                    'occupancy': occupancy, 'requested_occupancy': requested_occupancy,
+                    'scale_limited_to_native': scale_limited_to_native, 'upscale_factor': scale,
+                    'source_resolution_warning': False,
                     'qa_status': 'REPROCESSED_NEEDS_REVIEW'}

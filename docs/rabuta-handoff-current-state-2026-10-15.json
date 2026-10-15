@@ -1,0 +1,51 @@
+{
+  "verified_at_utc": "2026-10-14T17:39:06.335233+00:00",
+  "scope": "Handoff verification only; no image mutations",
+  "published_first_wave": 64,
+  "first_wave_journal_status": "APPLIED",
+  "backup_files_verified": 1169,
+  "current_live_files": 1179,
+  "added_since_first_wave": [],
+  "removed_since_first_wave": [],
+  "changes_outside_first_wave_journal": [
+    {
+      "name": "4045198851054-front.jpg",
+      "expected_first_wave_sha256": "1654024448c9ae17d89a48b43c911e79210eab1f67e156b081d850975707ceca",
+      "current_sha256": "e5032c093998d41c96017fb90c8dee72deaafc6202e9f0b6b527660b37a28ada",
+      "last_modified_utc": "2026-10-14T17:33:29.036978+00:00",
+      "records": [
+        {
+          "excel_row": 1011,
+          "record_id": "G3-0122"
+        }
+      ]
+    },
+    {
+      "name": "4045198851566-front.jpg",
+      "expected_first_wave_sha256": "aaa33bf40cbb5f6ba2ef97824a4e1a64f953b5a6d892b629df36bef40823d50e",
+      "current_sha256": "9d3fdcfbd2d95b99c57f80f9504f0d30009f94368aeb60e3295a430425152966",
+      "last_modified_utc": "2026-10-14T17:33:23.060853+00:00",
+      "records": [
+        {
+          "excel_row": 1008,
+          "record_id": "G3-0119"
+        }
+      ]
+    }
+  ],
+  "full_run_statuses": {
+    "NEEDS_MANUAL_REVIEW": 1102,
+    "BLOCKED_NEEDS_SOURCE": 177,
+    "REPROCESSED_NEEDS_REVIEW": 70,
+    "BLOCKED_IDENTITY_CONFLICT": 2
+  },
+  "remaining_audit_queue": 305,
+  "remaining_by_range": {
+    "4-454": 74,
+    "455-904": 67,
+    "905-1354": 164
+  },
+  "workbook_sha256_unchanged": "c8a58d9a294799cd4bb12c13bf32109ef8681d096875dd84ddca23d947c1eb11",
+  "round2_artifacts": [],
+  "qa_pass": false
+}

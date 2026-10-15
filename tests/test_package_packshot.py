@@ -75,19 +75,40 @@ def test_native_thumbnail_is_rejected_instead_of_upscaled_as_a_source():
         render_verified_packshot(image, mask)
 
 
+def test_render_rejects_native_package_when_2400_canvas_would_require_upscaling():
+    image = Image.new('RGB', (1200, 1000), (245, 240, 220))
+    mask = np.zeros((1000, 1200), np.uint8)
+    mask[100:800, 100:700] = 255
+    with pytest.raises(UnverifiedPackageError, match='upscal'):
+        render_verified_packshot(image, mask, target_side=2400, shape='square')
+
+
+def test_native_fit_reduces_occupancy_without_upscaling_when_product_remains_large():
+    image = Image.new('RGB', (2200, 2200), (245, 240, 220))
+    mask = np.zeros((2200, 2200), np.uint8)
+    mask[100:2005, 300:1900] = 255
+    output, metrics = render_verified_packshot(
+        image, mask, target_side=2400, shape='square', fit_to_native=True)
+    assert output.size == (2400, 2400)
+    assert metrics['upscale_factor'] == 1
+    assert metrics['scale_limited_to_native'] is True
+    assert metrics['occupancy'] == pytest.approx(1905 / 2400)
+    assert metrics['requested_occupancy'] == pytest.approx(.84)
+
+
 @pytest.mark.parametrize('shape,box,expected', [
-    ('tall', (100, 100, 300, 1100), [422, 2112]),
-    ('horizontal', (100, 100, 900, 500), [2136, 1068]),
+    ('tall', (100, 100, 300, 1100), [141, 704]),
+    ('horizontal', (100, 100, 900, 500), [712, 356]),
 ])
 def test_adaptive_layout_preserves_product_aspect_ratio(shape, box, expected):
     image, _ = fixture()
     mask = np.zeros((1200, 1000), np.uint8)
     x0, y0, x1, y1 = box
     mask[y0:y1, x0:x1] = 255
-    output, metrics = render_verified_packshot(image, mask, shape=shape)
-    assert output.size == (2400, 2400)
+    output, metrics = render_verified_packshot(image, mask, target_side=800, shape=shape)
+    assert output.size == (800, 800)
     assert metrics['placed_size'] == expected
-    assert metrics['upscale_factor'] > 1
+    assert metrics['upscale_factor'] <= 1
 
 
 def test_polygon_outside_source_is_not_silently_clamped():

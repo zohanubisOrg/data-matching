@@ -19,7 +19,8 @@ from PIL import Image, ImageDraw, ImageOps
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src'))
 from product_mapper.vision.package_packshot import (
-    UnverifiedPackageError, mask_from_polygon, render_verified_packshot,
+    InsufficientNativeResolutionError, UnverifiedPackageError,
+    mask_from_polygon, render_verified_packshot,
 )
 
 
@@ -44,7 +45,47 @@ def open_source(path):
         return ImageOps.exif_transpose(image).convert('RGB')
 
 
-def run_reprocessing(records, annotations, output_dir, originals_dir, source_map=None, *, catalog_records=None):
+def resolution_index(rows):
+    indexed={}
+    for item in rows:
+        barcode=str(item.get('barcode','')).strip()
+        if not barcode or barcode in indexed:
+            raise ValueError('Duplicate barcode resolution entry or missing barcode')
+        indexed[barcode]=item
+    return indexed
+
+
+def _resolution_selects_record(barcode,row,record_id,resolution,catalog_records):
+    if not isinstance(resolution,dict) or not str(resolution.get('evidence','')).strip():
+        return False
+    selected=resolution.get('selected')
+    if not isinstance(selected,dict):
+        return False
+    try:
+        selected_key=(int(selected['excel_row']),str(selected['record_id']))
+    except (KeyError,TypeError,ValueError):
+        return False
+    if selected_key!=(row,record_id):
+        return False
+    excluded=resolution.get('excluded')
+    if not isinstance(excluded,list):
+        return False
+    excluded_keys=set()
+    for item in excluded:
+        if not isinstance(item,dict) or not str(item.get('reason','')).strip():
+            return False
+        try:
+            excluded_keys.add((int(item['excel_row']),str(item['record_id'])))
+        except (KeyError,TypeError,ValueError):
+            return False
+    expected={(int(item['excel_row']),str(item['record_id'])) for item in catalog_records
+              if str(item.get('barcode',''))==barcode and
+              (int(item['excel_row']),str(item['record_id']))!=(row,record_id)}
+    return excluded_keys==expected
+
+
+def run_reprocessing(records, annotations, output_dir, originals_dir, source_map=None, *,
+                     catalog_records=None, identity_resolutions=None):
     output_dir, originals_dir = Path(output_dir).resolve(), Path(originals_dir).resolve()
     if any(p.lower() in ('front-v2','front-v3','back-v2','originals','front_photos') for p in output_dir.parts):
         raise ValueError('Output must be a new review directory, separate from sources and delivery')
@@ -58,15 +99,23 @@ def run_reprocessing(records, annotations, output_dir, originals_dir, source_map
         indexed[k] = annotation
     if len({key(r) for r in records}) != len(records):
         raise ValueError('Duplicate record identity in input')
+    catalog_records=list(catalog_records if catalog_records is not None else records)
     identities = defaultdict(set)
-    for record in (catalog_records if catalog_records is not None else records):
+    for record in catalog_records:
         if record['barcode']:
             identities[str(record['barcode'])].add(str(record['record_id']))
+    identity_resolutions=identity_resolutions or {}
     output_dir.mkdir(parents=True, exist_ok=False)
     results = []
     for record in records:
         bc, rid, row = key(record)
         result = {**record, 'status': 'NEEDS_MANUAL_REVIEW', 'qa_pass': False}
+        # A previous run may have been used as the audit input. Never let its
+        # artifact paths or provenance leak into this run's pending/blocked rows.
+        for field in ('annotation', 'source_path', 'source_sha256', 'source_size',
+                      'output_path', 'output_sha256', 'mask_path', 'mask_sha256',
+                      'overlay_path', 'layout'):
+            result.pop(field, None)
         candidates = []
         if bc and re.fullmatch(r'[0-9]+', bc):
             candidates = sorted(p.resolve() for p in (originals_dir/bc).glob('*')
@@ -81,13 +130,17 @@ def run_reprocessing(records, annotations, output_dir, originals_dir, source_map
                     candidates.append(path)
             candidates = sorted(set(candidates))
         result['source_candidates'] = [str(p) for p in candidates]
-        if bc and len(identities[bc]) > 1:
+        resolved_conflict=(bc and len(identities[bc])>1 and _resolution_selects_record(
+            bc,row,rid,identity_resolutions.get(bc),catalog_records))
+        if bc and len(identities[bc]) > 1 and not resolved_conflict:
             result.update(status='BLOCKED_IDENTITY_CONFLICT', reason='Barcode belongs to multiple Record IDs; verify identity before rendering')
         elif not bc or not rid:
             result.update(status='BLOCKED_NEEDS_SOURCE', reason='Missing product identity')
         elif key(record) not in indexed:
             result.update(status='NEEDS_MANUAL_REVIEW' if candidates else 'BLOCKED_NEEDS_SOURCE',
                           reason='Source files are candidates only; verified identity/front/complete boundary required' if candidates else 'No verified native source; Excel previews are not restoration sources')
+            if resolved_conflict:
+                result['identity_resolution']=identity_resolutions[bc]
         else:
             annotation = indexed[key(record)]
             try:
@@ -127,7 +180,9 @@ def run_reprocessing(records, annotations, output_dir, originals_dir, source_map
                 if rotation:
                     image = image.rotate(rotation, expand=True)
                     mask = np.rot90(mask, rotation//90).copy()
-                output, layout = render_verified_packshot(image, mask, shape=annotation.get('shape','auto'))
+                output, layout = render_verified_packshot(
+                    image, mask, shape=annotation.get('shape','auto'),
+                    fit_to_native=annotation.get('fit_to_native') is True)
                 layout.update(render_source_size=list(image.size), rotation_ccw=rotation,
                               coordinates='EXIF-oriented source after rotation_ccw')
                 stem = f'{bc}__{rid}__row{row:04d}'
@@ -146,6 +201,8 @@ def run_reprocessing(records, annotations, output_dir, originals_dir, source_map
                               mask_path=str(mask_path), mask_sha256=sha256(mask_path),
                               overlay_path=str(overlay_path), layout=layout,
                               reason='Rendered from reviewed source boundary; final visual QA and back-image review pending')
+            except InsufficientNativeResolutionError as exc:
+                result.update(status='BLOCKED_NEEDS_SOURCE', reason=str(exc))
             except (KeyError, ValueError, OSError, ImportError) as exc:
                 result.update(status='NEEDS_MANUAL_REVIEW', reason=f'{type(exc).__name__}: {exc}')
         results.append(result)
@@ -168,6 +225,8 @@ def main():
     parser.add_argument('--workbook', type=Path, default=ROOT/'output/catalog_pairs/Rabuta_master_final_Delivery_Embedded.xlsx')
     parser.add_argument('--source-map', type=Path, default=ROOT/'output/catalog_pairs/front_v3_source_map.json',
                         help='Historical paths are candidates only; role labels are not trusted')
+    parser.add_argument('--identity-resolutions',type=Path,
+                        help='JSONL evidence resolving duplicate barcode identities')
     args = parser.parse_args()
     records = read_jsonl(args.records)
     import openpyxl
@@ -181,11 +240,13 @@ def main():
         if workbook_identities.get(row) != key(record)[:2]:
             raise ValueError(f'Workbook/audit identity mismatch at row {row}')
     workbook.close()
+    resolutions=resolution_index(read_jsonl(args.identity_resolutions)) if args.identity_resolutions else {}
     results = run_reprocessing(records, read_jsonl(args.annotations) if args.annotations else [],
                                args.output_dir, args.originals_dir,
                                json.loads(args.source_map.read_text(encoding='utf-8-sig')) if args.source_map.exists() else {},
                                catalog_records=[{'excel_row':row,'barcode':identity[0],'record_id':identity[1]}
-                                                for row,identity in workbook_identities.items()])
+                                                for row,identity in workbook_identities.items()],
+                               identity_resolutions=resolutions)
     print(json.dumps(dict(Counter(r['status'] for r in results)), ensure_ascii=False))
     # Explicitly distinct from PASS: candidates and blockers require review.
     return 2 if any(r['status'] != 'REPROCESSED_NEEDS_REVIEW' for r in results) else 0

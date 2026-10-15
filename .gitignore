@@ -124,11 +124,42 @@ customer-send-me.xlsx
 
 
 # ==========================================
-# 5. Thư Mục Output Xử Lý (Processing Output)
+# 5. Thư Mục Output Xử Lý & Ảnh Thành Phẩm (Processing Outputs & Media)
 # ==========================================
 # Bỏ qua toàn bộ kết quả render/export ngoại trừ file giữ thư mục .gitkeep
 output/*
 !output/.gitkeep
+outputs/*
+!outputs/.gitkeep
+
+# Thư mục ảnh sản phẩm đã xử lý trong web portal (tránh hàng ngàn ảnh WebP/JPG nặng hàng GB)
+web/public/products/*
+!web/public/products/.gitkeep
+!web/public/products/*/
+web/public/products/*/*
+!web/public/products/*/.gitkeep
+web/public/products/**/*.webp
+web/public/products/**/*.png
+web/public/products/**/*.jpg
+web/public/products/**/*.jpeg
+
+# Ảnh chụp màn hình, test crops & screenshots trong scripts
+scripts/**/*.png
+scripts/**/*.jpg
+scripts/**/*.jpeg
+scripts/**/*.webp
+scripts/*.png
+scripts/*.jpg
+
+# Media & video dung lượng lớn
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+
+# Thư mục tạm thời edit / staging
+.tmp*/
 
 
 # ==========================================
