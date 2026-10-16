@@ -123,7 +123,8 @@ class MattingEngine:
                 num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(holes_mask.astype(np.uint8))
                 for i in range(1, num_labels):
                     hole_area = stats[i, cv2.CC_STAT_AREA]
-                    if hole_area < 150 or hole_area > (img_area * 0.05):
+                    # Allow protecting larger transparent packaging windows up to 45% of image area
+                    if hole_area < 50 or hole_area > (img_area * 0.45):
                         continue
 
                     x, y, w_box, h_box = (
@@ -143,9 +144,10 @@ class MattingEngine:
                     mean_lum = float(mean_bgr.mean())
                     cy = centroids[i][1]
 
+                    # Only genuine small hanging slots (quai treo) in top 35% are allowed to be transparent
                     is_real_hanging_hole = (
-                        (dist_to_bg < 32.0 and mean_lum > 210.0 and hole_area < (img_area * 0.035))
-                        or (dist_to_bg < 20.0 and mean_lum > 195.0 and cy < (h * 0.45))
+                        (cy < (h * 0.35) and hole_area < (img_area * 0.025) and dist_to_bg < 30.0 and mean_lum > 200.0)
+                        or (cy < (h * 0.25) and hole_area < (img_area * 0.015) and dist_to_bg < 18.0)
                     )
 
                     if is_real_hanging_hole:
@@ -153,9 +155,23 @@ class MattingEngine:
                         sub_solid[sub_mask] = 0
                         solid_interior[y : y + h_box, x : x + w_box] = sub_solid
 
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-            core_solid = cv2.erode(solid_interior, kernel, iterations=1)
-            enhanced_alpha = np.maximum(alpha, core_solid)
+                # Non-invasive Edge Recovery: recover white labels, glossy cellophane and packaging borders
+                # that were falsely eroded or gouged by raw AI matting
+                border_std = np.std(border_pixels, axis=0)
+                bg_thresh = max(22.0, float(np.mean(border_std) * 2.2))
+                color_diff = np.linalg.norm(rgb_bgr.astype(np.float32) - bg_median.astype(np.float32), axis=-1)
+
+                for cnt in sig_cnts:
+                    hull = cv2.convexHull(cnt)
+                    hull_mask = np.zeros((h, w), dtype=np.uint8)
+                    cv2.drawContours(hull_mask, [hull], -1, 255, thickness=cv2.FILLED)
+
+                    gap_mask = (hull_mask == 255) & (bin_mask == 0)
+                    restore_mask = gap_mask & (color_diff > bg_thresh)
+                    solid_interior[restore_mask] = 255
+
+            # Retain full solid interior without destructive erosion to prevent edge loss
+            enhanced_alpha = np.maximum(alpha, solid_interior)
 
             return enhanced_alpha
         except Exception:

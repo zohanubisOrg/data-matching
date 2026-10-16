@@ -54,14 +54,19 @@ class StudioStandardizer:
         self.enable_contact_shadow = enable_contact_shadow
         self.duplicate_guard = AntiDuplicateGuard()
 
-    def standardize(self, rgba_img: Image.Image) -> Tuple[Image.Image, Tuple[int, int, int, int]]:
+    def standardize(
+        self, rgba_img: Image.Image, is_container: bool = False
+    ) -> Tuple[Image.Image, np.ndarray, Tuple[int, int, int, int]]:
         """Processes RGBA product into a clean 2048x2048 white packshot.
         
+        Args:
+            rgba_img: RGBA product image.
+            is_container: If True, applies specialized glass/reflection suppression and container grounding.
+            
         Returns:
-            (packshot_rgb_image, bounding_box_on_canvas)
+            (packshot_rgb_image, canvas_alpha_mask, bounding_box_on_canvas)
         """
         # 1. Filter out floor reflection strips while preserving multi-piece product geometry
-        # (e.g. quai treo, 2-compartment trays, bottle caps, attached accessories)
         alpha = np.array(rgba_img.split()[-1])
         _, bin_mask = cv2.threshold(alpha, 20, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(bin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -69,12 +74,15 @@ class StudioStandardizer:
 
         clutter_mask = np.zeros_like(alpha)
         has_clutter = False
+        min_aspect_clutter = 2.5 if is_container else 4.5
+        y_cutoff = 0.83 if is_container else 0.85
+
         for c in contours:
             cx, cy, cw, ch = cv2.boundingRect(c)
             centroid_y = cy + ch / 2.0
             aspect = float(cw) / max(1.0, float(ch))
-            # Discard only flat floor reflection bands at the bottom edge
-            if centroid_y > (img_h * 0.85) and aspect > 4.5:
+            # Discard flat floor reflection bands at bottom edge
+            if centroid_y > (img_h * y_cutoff) and aspect > min_aspect_clutter:
                 cv2.drawContours(clutter_mask, [c], -1, 255, thickness=cv2.FILLED)
                 has_clutter = True
 
@@ -88,7 +96,8 @@ class StudioStandardizer:
         if len(x_indices) == 0 or len(y_indices) == 0:
             # Fallback for empty image
             blank = Image.new("RGB", (self.canvas_size, self.canvas_size), (255, 255, 255))
-            return blank, (0, 0, 0, 0)
+            empty_mask = np.zeros((self.canvas_size, self.canvas_size), dtype=np.uint8)
+            return blank, empty_mask, (0, 0, 0, 0)
 
         x_min, x_max = int(np.min(x_indices)), int(np.max(x_indices))
         y_min, y_max = int(np.min(y_indices)), int(np.max(y_indices))

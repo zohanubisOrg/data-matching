@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """Run pipeline-zohanubis on all 462 raw images in source-import/G3_Original.
 
-Guarantees 100% full-batch processing across all 462 raw warehouse images:
-- Zero clipping: full packaging preserved (caps, necks, labels, sides)
-- High-fidelity BiRefNet matting on 2048x2048 studio white canvas
-- Dual output: webshop_front_hd/G3_Original/ and webshop_back_hd/G3_Original/
-- Enriched Master Excel update with embedded thumbnails
+Upgraded High-Fidelity Neural Packshot Engine for G3_Original:
+- Dynamic energy seam splitting based on shooting mode and barcode center
+- True front resolution for back_only photos (customer-provided & front-v5 repository)
+- Connected-component artifact & companion object filtration
+- Standardized onto 2048x2048 #FFFFFF studio canvas with contact shadow
+- Strictly single file per SKU ([barcode]-front.jpg)
+- Overwrites prior output files in webshop_front_hd/G3_Original
+- Skips back photos (already generated)
 """
 from __future__ import annotations
 
 import gc
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -33,8 +37,10 @@ if sys.platform == "win32":
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from PIL import Image
+import cv2
+import numpy as np
 import openpyxl
+from PIL import Image
 
 from product_mapper.zohanubis.sanitizer import ImageSanitizer
 from product_mapper.zohanubis.hero_cropper import HeroCropper
@@ -130,9 +136,72 @@ def load_catalog_info(excel_path: Path) -> Dict[str, Dict[str, Any]]:
     return catalog
 
 
+def calculate_front_crop_box(im: Image.Image, mode: str, bc_center: Optional[Tuple[float, float]]) -> Tuple[int, int, int, int]:
+    """Calculates the precise crop box isolating the front hero view."""
+    w, h = im.size
+    small = im.resize((640, max(1, int(640 * h / w))), Image.Resampling.BILINEAR)
+    cv_small = cv2.cvtColor(np.array(small), cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(cv_small, cv2.COLOR_BGR2GRAY)
+    sw, sh = cv_small.shape[1], cv_small.shape[0]
+
+    # Mode 1: Back is on bottom -> Front is top
+    if mode == "back_bottom" or (bc_center and bc_center[1] > 0.60):
+        grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        row_energy = np.abs(grad_y).sum(axis=1)
+        s_min, s_max = max(1, int(sh * 0.35)), min(sh - 1, int(sh * 0.65))
+        split_row = s_min + int(np.argmin(row_energy[s_min:s_max]))
+        split_y = int(h * split_row / float(sh))
+        return (0, 0, w, min(h, split_y + int(h * 0.04)))
+
+    # Mode 2: Back is on top -> Front is bottom
+    if mode == "back_top" or (bc_center and bc_center[1] < 0.40):
+        grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        row_energy = np.abs(grad_y).sum(axis=1)
+        s_min, s_max = max(1, int(sh * 0.35)), min(sh - 1, int(sh * 0.65))
+        split_row = s_min + int(np.argmin(row_energy[s_min:s_max]))
+        split_y = int(h * split_row / float(sh))
+        return (0, max(0, split_y - int(h * 0.04)), w, h)
+
+    # Mode 3: Back is on right -> Front is left
+    if mode == "back_right" or (bc_center and bc_center[0] > 0.55):
+        grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        col_energy = np.abs(grad_x).sum(axis=0)
+        s_min, s_max = max(1, int(sw * 0.35)), min(sw - 1, int(sw * 0.65))
+        split_col = s_min + int(np.argmin(col_energy[s_min:s_max]))
+        split_x = int(w * split_col / float(sw))
+        return (0, 0, min(w, split_x + int(w * 0.04)), h)
+
+    # Mode 4: Back is on left -> Front is right
+    if mode == "back_left" or (bc_center and bc_center[0] < 0.45):
+        grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        col_energy = np.abs(grad_x).sum(axis=0)
+        s_min, s_max = max(1, int(sw * 0.35)), min(sw - 1, int(sw * 0.65))
+        split_col = s_min + int(np.argmin(col_energy[s_min:s_max]))
+        split_x = int(w * split_col / float(sw))
+        return (max(0, split_x - int(w * 0.04)), 0, w, h)
+
+    # Mode 5: Single shot or centered
+    return (0, 0, w, h)
+
+
+def clean_alpha_mask(alpha: np.ndarray) -> np.ndarray:
+    """Eliminates residual slivers and secondary objects from the adjacent product."""
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats((alpha > 40).astype(np.uint8))
+    if num_labels <= 2:
+        return alpha
+    areas = [stats[i, cv2.CC_STAT_AREA] for i in range(1, num_labels)]
+    max_area = max(areas)
+    cleaned = np.zeros_like(alpha)
+    for i in range(1, num_labels):
+        # Keep the primary object and significant connected parts (e.g. lid/straw/cap)
+        if stats[i, cv2.CC_STAT_AREA] >= max_area * 0.12:
+            cleaned[labels == i] = alpha[labels == i]
+    return cleaned
+
+
 def main() -> int:
     print("=================================================================")
-    print("      PIPELINE-ZOHANUBIS: BATCH RUNNER FOR ALL 462 G3 PHOTOS      ")
+    print("    UPGRADED PIPELINE-ZOHANUBIS: HIGH-FIDELITY G3_ORIGINAL ENGINE")
     print("=================================================================")
 
     g3_dir = ROOT / "source-import/G3_Original"
@@ -150,13 +219,14 @@ def main() -> int:
 
     scan_cache_path = reports_dir / "barcode_scan_cache_G3.json"
     manifest_path = ROOT / "output/catalog_pairs/manifest_G3_Original_v2.json"
+    v5_dir = ROOT / "output/catalog_pairs/tagged/front-v5"
 
     import argparse
-    parser = argparse.ArgumentParser(description="Run pipeline on all 462 G3 raw images")
-    parser.add_argument("--limit", type=int, default=None, help="Process first N images only (for test)")
+    parser = argparse.ArgumentParser(description="Upgraded pipeline for all 462 G3 raw images")
+    parser.add_argument("--limit", type=int, default=None, help="Process first N images only")
     args = parser.parse_args()
 
-    # 1. Discover all 462 raw photos
+    # 1. Discover all raw photos
     raw_files = sorted(list(g3_dir.glob("*")), key=lambda p: p.name)
     if args.limit:
         raw_files = raw_files[:args.limit]
@@ -188,11 +258,33 @@ def main() -> int:
     product_back_map: Dict[str, Path] = {}
     quality_records: List[QualityMetrics] = []
 
+    # Pre-index existing back photos from webshop_back_hd/G3_Original (do not reprocess back photos)
+    for bf in back_hd_dir.glob("*.jpg"):
+        bc_clean = bf.stem.replace("_back", "").replace("-back", "").strip()
+        cat_p = catalog.get(bc_clean)
+        if cat_p:
+            product_back_map[cat_p["record_id"]] = bf
+    print(f"Pre-indexed {len(product_back_map)} existing back photos from {back_hd_dir.name}.")
+
+    # Index customer pre-made front repository
+    cust_dir = ROOT / "source-import/customer-send-me-front-product"
+    customer_front_map: Dict[str, Path] = {}
+    if cust_dir.exists():
+        for entry in cust_dir.iterdir():
+            if entry.is_file() and entry.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+                match = re.match(r"^([0-9A-Za-z]+)[-_]front", entry.name)
+                if match:
+                    bc_k = match.group(1).strip()
+                    customer_front_map[bc_k] = entry
+                    if bc_k.startswith("0"):
+                        customer_front_map[bc_k.lstrip("0")] = entry
+    print(f"Indexed {len(customer_front_map)} customer pre-made front packshots.")
+
     total_count = len(raw_files)
     t_start = time.time()
 
     print("\n-----------------------------------------------------------------")
-    print(f"Starting pipeline execution for all {total_count} photos...")
+    print(f"Starting upgraded pipeline execution for all {total_count} photos...")
     print("-----------------------------------------------------------------")
 
     for idx, raw_path in enumerate(raw_files, start=1):
@@ -210,80 +302,95 @@ def main() -> int:
                 bc_center = (0.25, 0.50)
             elif mode == "back_right":
                 bc_center = (0.75, 0.50)
+            elif mode == "back_bottom":
+                bc_center = (0.50, 0.75)
+            elif mode == "back_top":
+                bc_center = (0.50, 0.25)
 
         cat_info = catalog.get(primary_bc) if primary_bc else None
         record_id = cat_info["record_id"] if cat_info else f"G3-RAW-{stem}"
         name_en = cat_info["name_en"] if cat_info else ""
-        demo_img = matcher.demo_images.get(cat_info["row_idx"]) if cat_info else None
 
-        # Determine target filenames
+        # Determine target filenames (strictly single [barcode]-front.jpg file)
         if primary_bc:
-            cand_name = f"{primary_bc}_front.jpg"
+            cand_name = f"{primary_bc}-front.jpg"
             if cand_name in used_front_names:
-                front_filename = f"{primary_bc}_{stem}_front.jpg"
+                front_filename = f"{primary_bc}_{stem}-front.jpg"
             else:
                 front_filename = cand_name
         else:
-            front_filename = f"{stem}_front.jpg"
+            front_filename = f"{stem}-front.jpg"
         used_front_names.add(front_filename)
 
         front_save_path = front_hd_dir / front_filename
-        back_save_path = (back_hd_dir / f"{primary_bc}_back.jpg") if primary_bc else (back_hd_dir / f"{stem}_back.jpg")
 
         disp_id = f"{primary_bc} ({stem})" if primary_bc else stem
         print(f"[G3_Original  ] [{idx:>3}/{total_count}] {disp_id:<28} ... ", end="", flush=True)
 
         try:
-            # 1. Load normalized image
-            raw_img = sanitizer.load_normalized_image(raw_path)
-            if max(raw_img.size) > 2400:
-                raw_img.thumbnail((2400, 2400), Image.Resampling.BILINEAR)
+            # Resolution Path 1: Check customer pre-made front packshot repository
+            cust_img_path = (customer_front_map.get(primary_bc) or customer_front_map.get(primary_bc.lstrip("0"))) if primary_bc else None
+            
+            # Resolution Path 2: If mode is back_only, resolve from verified front-v5 or customer repo
+            v5_front_path = (v5_dir / f"{primary_bc}-front.jpg") if primary_bc else None
+            if not v5_front_path or not v5_front_path.exists():
+                v5_front_path = (v5_dir / f"{primary_bc.lstrip('0')}-front.jpg") if primary_bc and primary_bc.startswith("0") else None
 
-            # 2. Isolate front hero
-            isolated_front, was_isolated = hero_cropper.isolate_front(
-                raw_img, demo_img=demo_img, barcode_center=bc_center, strategy="STANDARD"
-            )
+            if cust_img_path is not None:
+                with Image.open(cust_img_path) as c_img:
+                    c_rgb = c_img.convert("RGB")
+                packshot_rgb = standardizer.fit_to_canvas(c_rgb)
+                std_mask = np.ones((2048, 2048), dtype=np.uint8) * 255
+                metrics = quality_gate.evaluate_customer_packshot(packshot_rgb, record_id, primary_bc or stem)
+                bbox = (0, 0, 2048, 2048)
+                method_used = "CUSTOMER_PACKSHOT"
 
-            # 3. AI Matting
-            rgba_img, alpha_mask = matting_engine.remove_background(
-                isolated_front, enable_hole_protection=True
-            )
+            elif mode == "back_only" and v5_front_path is not None and v5_front_path.exists() and v5_front_path.stat().st_size > 5000:
+                with Image.open(v5_front_path) as v5_im:
+                    v5_rgb = v5_im.convert("RGB")
+                packshot_rgb = standardizer.fit_to_canvas(v5_rgb)
+                std_mask = np.ones((2048, 2048), dtype=np.uint8) * 255
+                metrics = quality_gate.evaluate_customer_packshot(packshot_rgb, record_id, primary_bc or stem)
+                bbox = (0, 0, 2048, 2048)
+                method_used = "VERIFIED_V5_RECONCILED"
 
-            # 4. Studio Standardizer (2048x2048 white canvas, centered, 48px margin)
-            packshot_rgb, std_mask, bbox = standardizer.standardize(rgba_img)
+            else:
+                # Resolution Path 3: Upgraded dynamic energy seam crop directly from raw source
+                raw_img = sanitizer.load_normalized_image(raw_path)
+                
+                # Dynamic energy seam crop
+                crop_box = calculate_front_crop_box(raw_img, mode=mode, bc_center=bc_center)
+                isolated_front = raw_img.crop(crop_box)
 
-            # 5. Isolate and save back photo if dual shot
-            if primary_bc:
-                try:
-                    isolated_back, _ = hero_cropper.isolate_back(
-                        raw_img, barcode_center=bc_center, strategy="STANDARD"
-                    )
-                    if max(isolated_back.size) > 2048:
-                        isolated_back.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
-                    isolated_back.save(back_save_path, "JPEG", quality=92, optimize=True)
-                    if cat_info:
-                        product_back_map[record_id] = back_save_path
-                except Exception as b_err:
-                    pass
+                if max(isolated_front.size) > 2048:
+                    isolated_front.thumbnail((2048, 2048), Image.Resampling.BILINEAR)
 
-            # 6. Quality Gate
-            metrics = quality_gate.evaluate_packshot(
-                packshot_rgb, std_mask, record_id, primary_bc or stem
-            )
+                # AI Neural Alpha Matting (Fast U2Net on CPU)
+                rgba_img, alpha_mask = matting_engine.remove_background(
+                    isolated_front, enable_hole_protection=True, allow_escalation=False
+                )
 
-            # 7. Save Deliverable
+                # Post-matting connected component artifact cleanup
+                cleaned_alpha = clean_alpha_mask(alpha_mask)
+                r, g, b, _ = rgba_img.split()
+                cleaned_rgba = Image.merge("RGBA", (r, g, b, Image.fromarray(cleaned_alpha, mode="L")))
+
+                # Studio Standardizer onto 2048x2048 pure white canvas
+                packshot_rgb, std_mask, bbox = standardizer.standardize(cleaned_rgba)
+
+                # Quality Gate
+                metrics = quality_gate.evaluate_packshot(
+                    packshot_rgb, std_mask, record_id, primary_bc or stem
+                )
+                method_used = "UPGRADED_SEAM_STUDIO"
+
+            # Save deliverable directly (overwriting prior file)
             packshot_rgb.save(front_save_path, "JPEG", quality=95, optimize=True)
             if cat_info:
                 product_front_map[record_id] = front_save_path
 
-            # Also ensure {primary_bc}_front.jpg is saved if duplicate variant was used
-            if primary_bc and front_filename != f"{primary_bc}_front.jpg":
-                primary_front_path = front_hd_dir / f"{primary_bc}_front.jpg"
-                if not primary_front_path.exists():
-                    packshot_rgb.save(primary_front_path, "JPEG", quality=95, optimize=True)
-
             quality_records.append(metrics)
-            print(f"-> {metrics.decision} [solidity={metrics.solidity:.2f}]", flush=True)
+            print(f"-> {metrics.decision} [{method_used}, solidity={metrics.solidity:.2f}, bbox={bbox}]", flush=True)
 
             manifest_records.append({
                 "idx": idx,
@@ -293,20 +400,22 @@ def main() -> int:
                 "record_id": record_id,
                 "name_en": name_en,
                 "front_path": str(front_save_path),
-                "back_path": str(back_save_path) if back_save_path.exists() else "",
+                "method": method_used,
                 "decision": metrics.decision,
                 "solidity": metrics.solidity,
                 "bbox": bbox,
             })
 
         except Exception as e:
-            print(f"-> ERROR [{e}] - Attempting fallback", flush=True)
+            print(f"-> ERROR [{e}] - Attempting robust fallback", flush=True)
             try:
                 raw_fb = sanitizer.load_normalized_image(raw_path)
                 w, h = raw_fb.size
-                pad_x, pad_y = int(w * 0.05), int(h * 0.05)
-                fb_crop = raw_fb.crop((pad_x, pad_y, w - pad_x, h - pad_y))
-                fb_rgba, _ = matting_engine.remove_background(fb_crop, enable_hole_protection=False)
+                crop_box = calculate_front_crop_box(raw_fb, mode=mode, bc_center=bc_center)
+                fb_crop = raw_fb.crop(crop_box)
+                if max(fb_crop.size) > 2048:
+                    fb_crop.thumbnail((2048, 2048), Image.Resampling.BILINEAR)
+                fb_rgba, fb_alpha = matting_engine.remove_background(fb_crop, enable_hole_protection=False, allow_escalation=False)
                 fb_packshot, _, _ = standardizer.standardize(fb_rgba)
                 fb_packshot.save(front_save_path, "JPEG", quality=92, optimize=True)
                 if cat_info:
@@ -362,7 +471,7 @@ def main() -> int:
     delivered_backs = len(list(back_hd_dir.glob("*.jpg")))
 
     print("\n=================================================================")
-    print("              G3 ALL-462 PIPELINE EXECUTION COMPLETE              ")
+    print("        UPGRADED G3_ORIGINAL PIPELINE EXECUTION COMPLETE          ")
     print("=================================================================")
     print(f"Total Raw Photos Processed : {len(manifest_records)}/{total_count}")
     print(f"Delivered Front Packshots  : {delivered_fronts} (in {front_hd_dir})")

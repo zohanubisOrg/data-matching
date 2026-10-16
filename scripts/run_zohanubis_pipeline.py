@@ -78,6 +78,7 @@ def process_partition_stream(
     customer_dir: Path,
     matting_model: str,
     force: bool = False,
+    skip_back: bool = False,
 ) -> Tuple[Dict[str, Path], Dict[str, Path], List[QualityMetrics]]:
     """Processes all products belonging to a single partition stream."""
     folder_name = PARTITION_FOLDER_NAMES.get(partition_name, partition_name)
@@ -85,7 +86,8 @@ def process_partition_stream(
     part_back_dir = back_hd_dir / folder_name
     part_quarantine_dir = quarantine_dir / folder_name
     part_front_dir.mkdir(parents=True, exist_ok=True)
-    part_back_dir.mkdir(parents=True, exist_ok=True)
+    if not skip_back:
+        part_back_dir.mkdir(parents=True, exist_ok=True)
     part_quarantine_dir.mkdir(parents=True, exist_ok=True)
 
     sanitizer = ImageSanitizer()
@@ -124,29 +126,30 @@ def process_partition_stream(
                 if not cust_save_path.exists():
                     packshot_rgb.save(cust_save_path, "JPEG", quality=95, optimize=True)
 
-                back_src = p.verified_back_photos[0] if p.verified_back_photos else p.selected_front_photo
-                if back_src:
-                    try:
-                        raw_back_full = sanitizer.load_normalized_image(back_src)
-                        back_box, was_back_iso, _, _, _ = hero_cropper.isolate_back_coords(
-                            raw_back_full, barcode_center=p.barcode_center, strategy=p.strategy
-                        )
-                        if was_back_iso:
-                            isolated_back = raw_back_full.crop(back_box)
-                        else:
-                            isolated_back = raw_back_full
-                        if max(isolated_back.size) > 2048:
-                            isolated_back.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
-                        back_hd_path = part_back_dir / f"{p.barcode}_back.jpg"
-                        isolated_back.save(back_hd_path, "JPEG", quality=92, optimize=True)
-                        back_map[p.record_id] = back_hd_path
+                if not skip_back:
+                    back_src = p.verified_back_photos[0] if p.verified_back_photos else p.selected_front_photo
+                    if back_src:
+                        try:
+                            raw_back_full = sanitizer.load_normalized_image(back_src)
+                            back_box, was_back_iso, _, _, _ = hero_cropper.isolate_back_coords(
+                                raw_back_full, barcode_center=p.barcode_center, strategy=p.strategy
+                            )
+                            if was_back_iso:
+                                isolated_back = raw_back_full.crop(back_box)
+                            else:
+                                isolated_back = raw_back_full
+                            if max(isolated_back.size) > 2048:
+                                isolated_back.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+                            back_hd_path = part_back_dir / f"{p.barcode}_back.jpg"
+                            isolated_back.save(back_hd_path, "JPEG", quality=92, optimize=True)
+                            back_map[p.record_id] = back_hd_path
 
-                        # Evaluate back photo quality & barcode readability
-                        back_m = quality_gate.evaluate_back_packshot(isolated_back, p.record_id, p.barcode)
-                        if back_m.decision == "HARD_FAIL":
-                            print(f" (Back photo warn: {back_m.fail_reasons})", end="", flush=True)
-                    except Exception as back_err:
-                        print(f" (Back photo warn: {back_err})", end="", flush=True)
+                            # Evaluate back photo quality & barcode readability
+                            back_m = quality_gate.evaluate_back_packshot(isolated_back, p.record_id, p.barcode)
+                            if back_m.decision == "HARD_FAIL":
+                                print(f" (Back photo warn: {back_m.fail_reasons})", end="", flush=True)
+                        except Exception as back_err:
+                            print(f" (Back photo warn: {back_err})", end="", flush=True)
 
                 metrics = quality_gate.evaluate_customer_packshot(packshot_rgb, p.record_id, p.barcode)
                 metrics_list.append(metrics)
@@ -206,31 +209,32 @@ def process_partition_stream(
             )
             packshot_rgb, std_mask, bbox = standardizer.standardize(rgba_img)
 
-            # Back photo isolation on full resolution
-            back_src = p.verified_back_photos[0] if p.verified_back_photos else p.selected_front_photo
-            if back_src:
-                try:
-                    raw_back_full = sanitizer.load_normalized_image(back_src)
-                    back_box, was_back_iso, _, _, _ = hero_cropper.isolate_back_coords(
-                        raw_back_full, barcode_center=p.barcode_center, strategy=p.strategy
-                    )
-                    if was_back_iso:
-                        isolated_back = raw_back_full.crop(back_box)
-                    else:
-                        isolated_back = raw_back_full
+            # Back photo isolation on full resolution (skipped if skip_back is enabled)
+            if not skip_back:
+                back_src = p.verified_back_photos[0] if p.verified_back_photos else p.selected_front_photo
+                if back_src:
+                    try:
+                        raw_back_full = sanitizer.load_normalized_image(back_src)
+                        back_box, was_back_iso, _, _, _ = hero_cropper.isolate_back_coords(
+                            raw_back_full, barcode_center=p.barcode_center, strategy=p.strategy
+                        )
+                        if was_back_iso:
+                            isolated_back = raw_back_full.crop(back_box)
+                        else:
+                            isolated_back = raw_back_full
 
-                    if max(isolated_back.size) > 2048:
-                        isolated_back.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
-                    back_hd_path = part_back_dir / f"{p.barcode}_back.jpg"
-                    isolated_back.save(back_hd_path, "JPEG", quality=92, optimize=True)
-                    back_map[p.record_id] = back_hd_path
+                        if max(isolated_back.size) > 2048:
+                            isolated_back.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+                        back_hd_path = part_back_dir / f"{p.barcode}_back.jpg"
+                        isolated_back.save(back_hd_path, "JPEG", quality=92, optimize=True)
+                        back_map[p.record_id] = back_hd_path
 
-                    # Evaluate back photo quality & barcode readability
-                    back_metrics = quality_gate.evaluate_back_packshot(isolated_back, p.record_id, p.barcode)
-                    if back_metrics.decision == "HARD_FAIL":
-                        print(f" (Back photo warn: {back_metrics.fail_reasons})", end="", flush=True)
-                except Exception as b_err:
-                    print(f" (Back error: {b_err})", end="", flush=True)
+                        # Evaluate back photo quality & barcode readability
+                        back_metrics = quality_gate.evaluate_back_packshot(isolated_back, p.record_id, p.barcode)
+                        if back_metrics.decision == "HARD_FAIL":
+                            print(f" (Back photo warn: {back_metrics.fail_reasons})", end="", flush=True)
+                    except Exception as b_err:
+                        print(f" (Back error: {b_err})", end="", flush=True)
 
             # Quality Gate Evaluation with crop truncation check and demo ground truth verification
             metrics = quality_gate.evaluate_packshot(
@@ -441,6 +445,13 @@ def parse_args() -> argparse.Namespace:
         "--force",
         action="store_true",
         help="Force clean re-processing of packshots, ignoring already-generated output files",
+    )
+    parser.add_argument(
+        "--front-only",
+        "--skip-back",
+        dest="front_only",
+        action="store_true",
+        help="Generate only webshop_front_hd images, skipping webshop_back_hd processing",
     )
     return parser.parse_args()
 
@@ -800,6 +811,7 @@ def main() -> int:
             customer_dir,
             args.matting_model,
             force=args.force,
+            skip_back=args.front_only,
         )
         front_embed_map.update(p_front)
         back_embed_map.update(p_back)

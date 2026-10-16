@@ -31,30 +31,28 @@ from src.product_mapper.zohanubis.quality_gate import QualityGate
 
 NYT_SOURCE_DIR = ROOT / "source-import/Nyt25.09.26"
 FRONT_HD_DIR = ROOT / "output/shopify-zohanubis-image/webshop_front_hd/Nyt25.09.26"
-BACK_HD_DIR = ROOT / "output/shopify-zohanubis-image/webshop_back_hd/Nyt25.09.26"
 REPORTS_DIR = ROOT / "output/shopify-zohanubis-image/reports"
 
 FRONT_HD_DIR.mkdir(parents=True, exist_ok=True)
-BACK_HD_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Specification of all 65 verified items in Nyt25.09.26
 SPECS: List[Dict[str, Any]] = [
-    # Split items
-    {"barcode": "8856001000011", "type": "split", "source": "5.jpg", "front_half": "left", "name": "Golden Cup Agar-Agar Powder 25 g"},
-    {"barcode": "8850813101102", "type": "split", "source": "6.jpg", "front_half": "left", "name": "Chaokoh Scented Coconut Milk 250 ml"},
+    # Verified item specifications
+    {"barcode": "8856001000011", "type": "split", "source": "5.jpg", "front_half": "right", "name": "Golden Cup Agar-Agar Powder 25 g"},
+    {"barcode": "8850813101102", "type": "crop_box", "source": "6.jpg", "box": (850, 0, 1850, 2560), "name": "Chaokoh Scented Coconut Milk 250 ml"},
     {"barcode": "7178600000881", "type": "split", "source": "8.jpg", "front_half": "left", "name": "Pasco Garlic Puree 270 g"},
     {"barcode": "4804888804998", "type": "single", "source": "11.jpg", "name": "Mama Sita's Lumpiang Shanghai Mix 40 g"},
-    {"barcode": "8851028000631", "type": "split", "source": "12.jpg", "front_half": "right", "name": "Vitamilk Original Soy Drink 300 ml"},
+    {"barcode": "8851028000631", "type": "split", "source": "12.jpg", "front_half": "left", "name": "Vitamilk Original Soy Drink 300 ml"},
     {"barcode": "8717703624632", "type": "split", "source": "13.jpg", "front_half": "right", "name": "HS Coconut Milk 20–22% Fat 400 ml"},
     {"barcode": "8717703638660", "type": "pair", "front": "14.jpg", "back": "15.jpg", "name": "Longkou Vermicelli 500 g"},
-    {"barcode": "3700417300126", "type": "split", "source": "mychinh.jpg", "front_half": "left", "name": "Ajinomoto Monosodium Glutamate 200 g"},
-    {"barcode": "4806011812986", "type": "split", "source": "super.jpg", "front_half": "right", "name": "Super Golden Bihon Cornstarch Sticks 227 g"},
+    {"barcode": "3700417300126", "type": "single", "source": "mychinh.jpg", "name": "Ajinomoto Monosodium Glutamate 200 g"},
+    {"barcode": "4806011812986", "type": "single", "source": "super.jpg", "name": "Super Golden Bihon Cornstarch Sticks 227 g"},
     {"barcode": "87282504", "type": "split", "source": "Tofu.jpg", "front_half": "right", "name": "Lin Tofu 400 g"},
-    {"barcode": "87282009", "type": "split", "source": "tofu2.jpg", "front_half": "right", "name": "Lin Soft Tofu 400 g"},
-    {"barcode": "8719497391554", "type": "split", "source": "IMG_5446.HEIC", "front_half": "left", "name": "Royal Orient Rice and Peanut Snack Mix 200 g"},
-    {"barcode": "8859448600585", "type": "split", "source": "IMG_5478.HEIC", "front_half": "right", "name": "Chili Powder"},
-    {"barcode": "8938500075018", "type": "split", "source": "IMG_5508.HEIC", "front_half": "left", "name": "Pre-cooked Bamboo Shoots in Water 680 g"},
+    {"barcode": "87282009", "type": "crop_box", "source": "tofu2.jpg", "box": (720, 0, 1920, 2560), "name": "Lin Soft Tofu 400 g"},
+    {"barcode": "8719497391554", "type": "single", "source": "IMG_5446.HEIC", "name": "Royal Orient Rice and Peanut Snack Mix 200 g"},
+    {"barcode": "8859448600585", "type": "single", "source": "IMG_5478.HEIC", "rotation": -90, "name": "Chili Powder"},
+    {"barcode": "8938500075018", "type": "single", "source": "IMG_5508.HEIC", "name": "Pre-cooked Bamboo Shoots in Water 680 g"},
 
     # Consecutive pairs
     {"barcode": "6925487994878", "type": "pair", "front": "IMG_5447.HEIC", "back": "IMG_5448.HEIC", "name": "Henan Noodles"},
@@ -73,7 +71,7 @@ SPECS: List[Dict[str, Any]] = [
     {"barcode": "8850100101143", "type": "pair", "front": "IMG_5479.HEIC", "back": "IMG_5480.HEIC", "name": "Wai Wai Quick Chilli Tom Yum Noodles"},
     {"barcode": "8934563138165", "type": "pair", "front": "IMG_5481.HEIC", "back": "IMG_5482.HEIC", "name": "Acecook Hao Hao Instant Noodles"},
     {"barcode": "8851229000799", "type": "pair", "front": "IMG_5483.HEIC", "back": "IMG_5484.HEIC", "name": "RosDee Pork Seasoning 160 g"},
-    {"barcode": "8850030116064", "type": "pair", "front": "IMG_5485.HEIC", "back": "IMG_5486.HEIC", "name": "Lobo Tom Yum Soup Paste 30 g"},
+    {"barcode": "8850030116064", "type": "pair", "front": "IMG_5485.HEIC", "back": "IMG_5486.HEIC", "rotation": -90, "name": "Lobo Tom Yum Soup Paste 30 g"},
     {"barcode": "8850030116217", "type": "pair", "front": "IMG_5487.HEIC", "back": "IMG_5488.HEIC", "name": "Lobo Red Curry Paste"},
     {"barcode": "8850030030339", "type": "pair", "front": "IMG_5489.HEIC", "back": "IMG_5490.HEIC", "name": "Lobo Chicken Rice Set 120 g"},
     {"barcode": "8850030110765", "type": "pair", "front": "IMG_5491.HEIC", "back": "IMG_5492.HEIC", "name": "Lobo Spicy Chicken Rice Seasoning"},
@@ -125,7 +123,6 @@ def run_pipeline():
     total_specs = len(SPECS)
     print(f"Total verified products to process: {total_specs}")
     print(f"Front output destination: {FRONT_HD_DIR}")
-    print(f"Back output destination : {BACK_HD_DIR}")
 
     results = []
     start_time = time.time()
@@ -152,6 +149,14 @@ def run_pipeline():
                     front_raw_img = full_img.crop((0, 0, int(w * 0.54), h))
                 else:
                     front_raw_img = full_img.crop((int(w * 0.46), 0, w, h))
+            elif stype == "crop_box":
+                source_path = NYT_SOURCE_DIR / spec["source"]
+                full_img = sanitizer.load_normalized_image(source_path)
+                box = spec["box"]
+                front_raw_img = full_img.crop(box)
+
+            if spec.get("rotation"):
+                front_raw_img = front_raw_img.rotate(spec["rotation"], expand=True)
 
             # 2. Deep Neural Matting with Detail Preservation
             t0 = time.time()
@@ -179,24 +184,6 @@ def run_pipeline():
             print(f"  Front Saved: {out_front_path.name} ({packshot_front.size}) in {matting_time:.1f}s | BBox: {bbox}")
             print(f"  Quality Gate: {metrics.decision} (Solidity: {metrics.solidity:.3f}, Blur: {metrics.blur_score:.1f}, Margin: {metrics.canvas_clipping_px}px)")
 
-            # 7. Back Packshot Processing
-            out_back_path = BACK_HD_DIR / f"{bc}_back.jpg"
-            if stype == "pair":
-                back_raw_path = NYT_SOURCE_DIR / spec["back"]
-                back_raw_img = sanitizer.load_normalized_image(back_raw_path)
-                back_std = standardizer.fit_to_canvas(back_raw_img)
-                back_std.save(out_back_path, "JPEG", quality=94, optimize=True)
-            elif stype == "split":
-                source_path = NYT_SOURCE_DIR / spec["source"]
-                full_img = sanitizer.load_normalized_image(source_path)
-                w, h = full_img.size
-                if spec["front_half"] == "left":
-                    back_crop = full_img.crop((int(w * 0.46), 0, w, h))
-                else:
-                    back_crop = full_img.crop((0, 0, int(w * 0.54), h))
-                back_std = standardizer.fit_to_canvas(back_crop)
-                back_std.save(out_back_path, "JPEG", quality=94, optimize=True)
-
             results.append({
                 "barcode": bc,
                 "name": nm,
@@ -206,7 +193,6 @@ def run_pipeline():
                 "blur_score": float(metrics.blur_score),
                 "bbox": [int(x) for x in bbox],
                 "front_path": str(out_front_path),
-                "back_path": str(out_back_path) if out_back_path.exists() else None,
             })
 
         except Exception as e:

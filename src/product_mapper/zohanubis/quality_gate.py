@@ -86,6 +86,7 @@ class QualityGate:
         is_complex_shape: bool = False,
         crop_mask: Optional[np.ndarray] = None,
         demo_img: Optional[Image.Image] = None,
+        is_container: bool = False,
     ) -> QualityMetrics:
         """Evaluates image quality metrics and assigns a balanced decision.
         
@@ -172,7 +173,7 @@ class QualityGate:
             if comp_area >= img_area * 0.04:  # At least 4% of image area
                 significant_components += 1
 
-        max_allowed_comps = 2 if is_complex_shape else 1
+        max_allowed_comps = 1 if is_container else (2 if is_complex_shape else 1)
         if significant_components > max_allowed_comps:
             fails.append(f"Multiple disconnected objects detected ({significant_components} components)")
         elif significant_components > 1:
@@ -189,8 +190,13 @@ class QualityGate:
             if hull_area > 0:
                 solidity = float(cnt_area / hull_area)
 
-        min_solidity = self.min_solidity_complex if is_complex_shape else self.min_solidity_standard
-        hard_fail_solidity = 0.25 if is_complex_shape else 0.45
+        if is_container:
+            min_solidity = 0.55  # Tall bottles have naturally narrower neck/shoulders
+            hard_fail_solidity = 0.35
+        else:
+            min_solidity = self.min_solidity_complex if is_complex_shape else self.min_solidity_standard
+            hard_fail_solidity = 0.25 if is_complex_shape else 0.45
+            
         if solidity < hard_fail_solidity:
             fails.append(f"Severe hollowing or broken body detected (solidity={solidity:.3f})")
         elif solidity < min_solidity:

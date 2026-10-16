@@ -70,6 +70,12 @@ class HeroCropper:
                 orig_y = max(0, int(y / scale))
                 orig_w = min(w_orig - orig_x, int(w / scale))
                 orig_h = min(h_orig - orig_y, int(h / scale))
+                # Discard edge clutter strips spanning full width (wall seam at top, floor band at bottom)
+                if orig_w >= int(w_orig * 0.90):
+                    if orig_y == 0 and orig_h < int(h_orig * 0.22):
+                        continue
+                    if (orig_y + orig_h) >= int(h_orig * 0.98) and orig_h < int(h_orig * 0.15):
+                        continue
                 boxes.append((orig_x, orig_y, orig_w, orig_h))
 
         return boxes
@@ -420,6 +426,17 @@ class HeroCropper:
             return (0, 0, w, cy2), True, False, 0.85, "HORIZONTAL_STACK_OPTIMAL_SEAM"
 
         # Archetype A: Multi-bottle / Multi-object with Demo Guidance (discarding hardcoded center_x)
+        if barcode_center is None:
+            # When barcode position is unspecified, the primary front product is centered in the frame
+            # (Convention: 'mặt trước luôn nằm giữa')
+            center_x = w / 2.0
+            best_box = min(boxes, key=lambda b: abs((b[0] + b[2] / 2.0) - center_x))
+            fx, fy, fw_b, fh_b = best_box
+            pad_x = int(fw_b * 0.10)
+            pad_y = int(fh_b * 0.10)
+            crop_box = (max(0, fx - pad_x), max(0, fy - pad_y), min(w, fx + fw_b + pad_x), min(h, fy + fh_b + pad_y))
+            return crop_box, True, False, 0.85, "CENTER_HERO_UNSPECIFIED_BC"
+
         back_box = None
         for b in boxes:
             bx, by, bw_b, bh_b = b
