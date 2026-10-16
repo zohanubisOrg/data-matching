@@ -1,10 +1,43 @@
-"""Studio standardizer module: 2048x2048 square canvas, auto-centering, contact shadow, sRGB."""
-from __future__ import annotations
-
-from typing import Tuple
+import hashlib
+import io
+from pathlib import Path
+from typing import Dict, Optional, Set, Tuple
 import cv2
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
+
+
+class AntiDuplicateGuard:
+    """Guards against saving identical output images across partition deliverables."""
+
+    def __init__(self):
+        self._seen_hashes: Dict[str, str] = {}  # sha256 -> identifier (barcode or filename)
+
+    def check_unique(self, img_bytes: bytes, identifier: str) -> Tuple[bool, Optional[str]]:
+        """Checks if img_bytes is unique. Returns (is_unique, conflicting_identifier)."""
+        h = hashlib.sha256(img_bytes).hexdigest()
+        if h in self._seen_hashes:
+            return False, self._seen_hashes[h]
+        self._seen_hashes[h] = identifier
+        return True, None
+
+    def register_existing_file(self, file_path: Path, identifier: str) -> None:
+        """Registers an already existing file to prevent duplicates from matching it."""
+        try:
+            if file_path.exists() and file_path.is_file():
+                h = hashlib.sha256(file_path.read_bytes()).hexdigest()
+                self._seen_hashes[h] = identifier
+        except Exception:
+            pass
+
+    def check_image_unique(self, image: Image.Image, identifier: str, quality: int = 95) -> Tuple[bool, Optional[str]]:
+        """Checks if a PIL Image encoded as JPEG is unique. Returns (is_unique, conflicting_identifier)."""
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=quality, optimize=True)
+        return self.check_unique(buf.getvalue(), identifier)
+
+    def reset(self) -> None:
+        self._seen_hashes.clear()
 
 
 class StudioStandardizer:
@@ -19,6 +52,7 @@ class StudioStandardizer:
         self.canvas_size = canvas_size
         self.target_fill_ratio = target_fill_ratio
         self.enable_contact_shadow = enable_contact_shadow
+        self.duplicate_guard = AntiDuplicateGuard()
 
     def standardize(self, rgba_img: Image.Image) -> Tuple[Image.Image, Tuple[int, int, int, int]]:
         """Processes RGBA product into a clean 2048x2048 white packshot.
@@ -26,8 +60,29 @@ class StudioStandardizer:
         Returns:
             (packshot_rgb_image, bounding_box_on_canvas)
         """
-        # 1. Get tight bounding box of product
+        # 1. Filter out floor reflection strips while preserving multi-piece product geometry
+        # (e.g. quai treo, 2-compartment trays, bottle caps, attached accessories)
         alpha = np.array(rgba_img.split()[-1])
+        _, bin_mask = cv2.threshold(alpha, 20, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(bin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        img_h, img_w = rgba_img.height, rgba_img.width
+
+        clutter_mask = np.zeros_like(alpha)
+        has_clutter = False
+        for c in contours:
+            cx, cy, cw, ch = cv2.boundingRect(c)
+            centroid_y = cy + ch / 2.0
+            aspect = float(cw) / max(1.0, float(ch))
+            # Discard only flat floor reflection bands at the bottom edge
+            if centroid_y > (img_h * 0.85) and aspect > 4.5:
+                cv2.drawContours(clutter_mask, [c], -1, 255, thickness=cv2.FILLED)
+                has_clutter = True
+
+        if has_clutter:
+            alpha = np.where(clutter_mask == 255, 0, alpha)
+            r, g, b, _ = rgba_img.split()
+            rgba_img = Image.merge("RGBA", (r, g, b, Image.fromarray(alpha)))
+
         y_indices, x_indices = np.where(alpha > 10)
 
         if len(x_indices) == 0 or len(y_indices) == 0:
@@ -113,7 +168,7 @@ class StudioStandardizer:
         scale = min(self.canvas_size / float(w), self.canvas_size / float(h))
         new_w = max(1, int(w * scale))
         new_h = max(1, int(h * scale))
-        scaled = rgb_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        scaled = rgb_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
         canvas = Image.new("RGB", (self.canvas_size, self.canvas_size), (255, 255, 255))
         pos_x = (self.canvas_size - new_w) // 2
         pos_y = (self.canvas_size - new_h) // 2

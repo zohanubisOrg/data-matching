@@ -149,8 +149,29 @@ class FrontViewMatcher:
         # Use intelligent sequential windowing
         cands = self.get_candidate_window(product, all_partition_records, window_size=4)
 
+        # Ensure suggested_front_candidate from sequential shooting is prioritized in candidates
+        cand_paths = {r.path for r in cands}
+        if product.suggested_front_candidate and product.suggested_front_candidate not in cand_paths:
+            # Add suggested candidate record
+            cand_paths.add(product.suggested_front_candidate)
+            # Find matching record or construct proxy
+            matching_r = next((r for r in all_partition_records if r.path == product.suggested_front_candidate), None)
+            if matching_r:
+                cands.insert(0, matching_r)
+
         demo_img = self.demo_images.get(product.row_idx)
         if demo_img is None:
+            # If no demo image is available, trust suggested sequential candidate if valid
+            if product.suggested_front_candidate and product.suggested_front_candidate not in blacklisted_paths:
+                return MatchResult(
+                    record_id=product.record_id,
+                    barcode=product.barcode,
+                    winning_photo_path=product.suggested_front_candidate,
+                    similarity_score=0.65,
+                    aspect_diff=0.0,
+                    was_isolated_hero=False,
+                )
+
             valid_cands = [r for r in cands if r.path not in blacklisted_paths]
             if valid_cands:
                 return MatchResult(
@@ -187,9 +208,12 @@ class FrontViewMatcher:
             # Cosine similarity
             sim = float(np.dot(demo_emb, cand_emb))
 
-            # Aspect ratio check
+            # Aspect ratio check (accounting for possible 90-degree rotation)
             cand_aspect = float(cand.width) / max(1.0, float(cand.height))
-            aspect_diff = abs(cand_aspect - demo_aspect) / demo_aspect
+            aspect_diff = min(
+                abs(cand_aspect - demo_aspect) / demo_aspect,
+                abs(cand_aspect - (1.0 / demo_aspect)) / (1.0 / demo_aspect),
+            )
             aspect_penalty = min(0.15, aspect_diff * 0.08)
             composite_score = sim - aspect_penalty
 
@@ -197,6 +221,17 @@ class FrontViewMatcher:
                 best_score = composite_score
                 best_path = cand.path
                 best_aspect_diff = aspect_diff
+
+        # If best match does not reach robust confidence threshold (0.62), reject blind match
+        if best_score < 0.62:
+            return MatchResult(
+                record_id=product.record_id,
+                barcode=product.barcode,
+                winning_photo_path=None,
+                similarity_score=max(0.0, best_score),
+                aspect_diff=best_aspect_diff,
+                was_isolated_hero=False,
+            )
 
         return MatchResult(
             record_id=product.record_id,

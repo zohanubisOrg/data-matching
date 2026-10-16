@@ -198,7 +198,18 @@ def scan_single_image(photo_path: Path, partition: str = "") -> BarcodeScanResul
 
 def _scan_worker(args: Tuple[Path, str]) -> BarcodeScanResult:
     path, partition = args
-    return scan_single_image(path, partition)
+    try:
+        return scan_single_image(path, partition)
+    except Exception:
+        return BarcodeScanResult(
+            path=path,
+            filename=path.name,
+            partition=partition,
+            barcodes=[],
+            detected_angle=0,
+            enhancement_used=False,
+            barcode_centers={},
+        )
 
 
 class ParallelBarcodeScanner:

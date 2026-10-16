@@ -47,3 +47,12 @@
   - `output/catalog_pairs/Rabuta_master_SKU_categories_ingredients_final_audit_v4.xlsx`
   - `output/catalog_pairs/Rabuta_master_final_Delivery_Embedded.xlsx`
   - `source-import/new_source_from_customer/14-10-new-requirment-final/Rabuta_master_SKU_categories_ingredients_final.xlsx` <!-- id: 4.2 -->
+
+## 5. Cập nhật Pipeline Zohanubis Trước Khi Chạy Giao Hàng Hàng Loạt
+- [x] 5.1 **Fix Crop (HeroCropper)**: Tích hợp SIFT Homography RANSAC 4 góc demo cho mọi sản phẩm có demo; cải tiến phát hiện biên vật thể thực thay vì tỷ lệ cố định; gắn cờ không chắc sang review. <!-- id: 5.1 -->
+- [x] 5.2 **Fix Mask & Detail Preservation (MattingEngine)**: Phân biệt lỗ thật (quai treo - trùng màu nền studio) vs lỗ khoét rỗng (ruột bao bì); không xóa viền nhựa/chi tiết mỏng ngoài solid mask; bảo toàn góc hộp. <!-- id: 5.2 -->
+- [x] 5.3 **Fix Resolution Pipeline (run_zohanubis_pipeline.py)**: Dò tọa độ crop trên proxy, crop trên ảnh nguồn full resolution trước khi standardizer đưa về 2048px (cả front và back). <!-- id: 5.3 -->
+- [x] 5.4 **Fix Quality Gate (quality_gate.py & run_zohanubis_pipeline.py)**: Thêm kiểm tra đứt biên khi crop; đối chiếu độ nguyên vẹn với demo/ảnh nguồn; đánh giá chất lượng ảnh back (kiểm tra barcode đọc được); đánh giá thực chất ảnh khách. <!-- id: 5.4 -->
+- [x] 5.5 **Fix Healing Loop (run_zohanubis_pipeline.py)**: Tuyệt đối giữ nguyên HARD_FAIL khi retry (n_components > 1, clipping, rỗng); không dùng solidity >= 0.50 để ép nhận ảnh lỗi vào giao hàng; giữ trong quarantine. <!-- id: 5.5 -->
+- [x] 5.6 **Fix Reconciler & Pair Matching (reconciler.py & front_matcher.py)**: Không gán cứng ảnh liền kề không barcode; đối chiếu xác minh với Column W demo qua visual embedding trước khi chấp nhận cặp ảnh. <!-- id: 5.6 -->
+

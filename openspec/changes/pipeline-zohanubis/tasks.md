@@ -59,7 +59,7 @@
 - [x] 8.4 Implement 5-Folder Concurrent Multi-Thread Execution:
   - Dispatch all 5 source folders (`G1`, `G2`, `G3`, `G4`, `Nyt`) in parallel using a 16-core CPU process pool.
   - Implement thread-safe atomic merge of all 5 partition results into `Rabuta_master_SKU_categories_zohanubis.xlsx`.
-- [ ] 8.5 Execute Automated Acceptance Verification on Benchmark Test Suite:
+- [x] 8.5 Execute Automated Acceptance Verification on Benchmark Test Suite:
   - `IMG_0885.jpeg` (Shan Meat Masala: center box intact, no bisecting, zero shipping box text).
   - `IMG_0123.jpeg` & `IMG_0429.jpeg` (Horizontal bottles: split along Y, zero waist slicing).
   - `IMG_0380.jpeg` (Stacked tubs: exactly 1 single isolated tub packshot).
